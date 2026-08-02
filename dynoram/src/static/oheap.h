@@ -25,8 +25,8 @@ using Val = std::unique_ptr<uint8_t[]>;
 
 class BlockMetadata {
  public:
-  Pos pos_;
-  Key key_;
+  Pos pos_ = 0;
+  Key key_ = 0;
 
   explicit BlockMetadata(bool zero_fill = false) {
     if (zero_fill) {
