@@ -64,6 +64,15 @@ typename Traits::block_t read_path(
   std::int64_t start_depth = static_cast<std::int64_t>(geom.routing_depth);
   for (std::int64_t depth = static_cast<std::int64_t>(geom.height); depth >= start_depth; --depth) {
     const std::uint64_t node_id = node_ids[static_cast<std::size_t>(depth)];
+    
+    // ALG_SKIP: Skip uninitialized buckets entirely. They contain no real blocks.
+    if (!st.is_bucket_initialized(node_id)) {
+#if defined(ORAM_DEBUG)
+      st.log().dbgf("zingoram::read_path: skipping uninitialized bucket id=%llu", static_cast<unsigned long long>(node_id));
+#endif
+      continue;
+    }
+
     auto& bucket = storage[node_id];
     auto& epoch = epochs[node_id];
 

@@ -92,6 +92,7 @@ inline void stage_subtree_evictslots(
   auto& topo = st.topology();
   auto& storage = st.storage();
   auto& stash = st.stash();
+  auto& uid_gen = st.uid_gen();
 
   const std::size_t subtree_count = static_cast<std::size_t>(geom.subtree_count);
   const std::uint64_t subtree_leaf_count = geom.subtree_leaf_count;
@@ -131,20 +132,28 @@ inline void stage_subtree_evictslots(
       // here we only operate on non-overlapping levels of the subpaths
       for (std::uint64_t level = non_overlap_start_level; level <= geom.height; ++level) {
         const std::uint64_t node_id = subpath_view.node_ids()[static_cast<std::size_t>(level)];
-        bucket_t& bucket = storage[node_id];
-
-        // read all real slots from the bucket
-        {
-          sn_prof_zone("zingoram.eviction.stage.bucket_read");
-          bucket.read_bucket_max(ctx.bucket_real_buf.data(), ctx.bucket_offset_buf.data());
-        }
-
-        const auto src_span = sn::util::span<const block_t>(ctx.bucket_real_buf.data(), bucket_real_size);
         auto dest_span =
             sn::util::span<block_t>(ctx.evict_path_blocks.data() + bucket_slot * bucket_real_size, bucket_real_size);
-        {
-          sn_prof_zone("zingoram.eviction.stage.copy_reals");
-          sn::obliv::copy(src_span.begin(), src_span.end(), dest_span.begin());
+
+        // ALG_SKIP: Skip reading uninitialized buckets, just fill dest_span with dummy blocks
+        if (!st.is_bucket_initialized(node_id)) {
+          for (std::size_t i = 0; i < bucket_real_size; ++i) {
+            dest_span[i].set_dummy(uid_gen);
+          }
+        } else {
+          bucket_t& bucket = storage[node_id];
+
+          // read all real slots from the bucket
+          {
+            sn_prof_zone("zingoram.eviction.stage.bucket_read");
+            bucket.read_bucket_max(ctx.bucket_real_buf.data(), ctx.bucket_offset_buf.data());
+          }
+
+          const auto src_span = sn::util::span<const block_t>(ctx.bucket_real_buf.data(), bucket_real_size);
+          {
+            sn_prof_zone("zingoram.eviction.stage.copy_reals");
+            sn::obliv::copy(src_span.begin(), src_span.end(), dest_span.begin());
+          }
         }
 
         blocks_written += bucket_real_size;
@@ -285,6 +294,9 @@ inline void rebuild_subtrees(
           bucket.rebuild(real_span, uid_gen, prng);
           // publish bucket sync metadata after rebuild
           epoch.publish_after_eviction_rebuild();
+
+          // ALG_SKIP: Bucket is officially initialized now
+          st.mark_bucket_initialized(node_id);
         }
       }
     });

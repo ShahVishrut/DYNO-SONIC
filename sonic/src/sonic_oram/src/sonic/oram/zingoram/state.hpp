@@ -20,6 +20,7 @@
 #include "sonic/oram/tree/bucket_heap.hpp"
 #include "sonic/oram/tree/path_buffer.hpp"
 #include "sonic/oram/tree/topology.hpp"
+#include "sonic/obliv/types/bitset.hpp"
 #include "sonic/oram/zingoram/metrics.hpp"
 #include "sonic/storage/cache_manager.hpp"
 #include "sonic/oram/storage/tiered_store.hpp"
@@ -179,6 +180,9 @@ public:
     };
     epoch_states_.initialize(geom_.node_count, make_epoch, uid_gen_, "bucket_heap:epoch");
 
+    initialized_.resize(geom_.node_count + 1);
+    initialized_.fill(false);
+
     sn::obliv::fill(eviction_plan_.subtree_active_subpaths.begin(), eviction_plan_.subtree_active_subpaths.end(), 0);
 
 #if defined(ORAM_DEBUG)
@@ -262,6 +266,15 @@ public:
       cache_manager_->stats_reset();
     }
   }
+
+  [[nodiscard]] bool is_bucket_initialized(std::uint64_t node_id) const noexcept {
+    return initialized_.get(node_id);
+  }
+
+  void mark_bucket_initialized(std::uint64_t node_id) noexcept {
+    initialized_.set(node_id, true);
+  }
+
   metrics& metrics_ref() noexcept { return metrics_; }
   const metrics& metrics_ref() const noexcept { return metrics_; }
   [[nodiscard]] metrics_snapshot metrics_snapshot() const noexcept { return metrics_.snapshot(); }
@@ -325,7 +338,6 @@ private:
       bucket_t bucket(
           node_id, level, options_.bucket_real_size, options_.bucket_dummy_size, std::move(store), std::move(meta)
       );
-      bucket.initialize(uid_gen_, prng_);
       return bucket;
     };
 
@@ -481,6 +493,7 @@ private:
   sn::util::log::logger logger_;
   stash_t stash_;
   eviction_plan_buffers eviction_plan_{};
+  sn::obliv::concurrent_bitset initialized_{};
 #if defined(ORAM_DEBUG)
   sn::oram::tree::assigned_block_map assigned_blocks_;
 #endif

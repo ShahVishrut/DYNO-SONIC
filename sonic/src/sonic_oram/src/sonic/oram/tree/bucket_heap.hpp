@@ -43,7 +43,6 @@ public:
 
     for (std::uint64_t node_id = 1; node_id <= node_count; ++node_id) {
       buckets_.emplace_back(make_bucket(node_id));
-      buckets_.back().fill_dummy(uid_gen);
     }
   }
 
