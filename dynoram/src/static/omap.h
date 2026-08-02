@@ -4,7 +4,9 @@
 #include <cstdint>
 #include <cstddef>
 #include <map>
+#include <set>
 #include <string>
+#include <memory>
 
 #include "src/utils/crypto.h"
 #include "src/static/oram.h"
@@ -96,6 +98,7 @@ class OMap {
   uint32_t accesses_before_finalize_ = 0;
   ORKey next_key_ = 1;
   std::map<ORKey, Block> cache_;
+  std::set<ORKey> new_keys_;
   Val delete_res_;
   bool delete_successful_ = false;
 
@@ -103,7 +106,7 @@ class OMap {
   BlockPointer DeleteRec(Key k, BlockPointer current_bp, crypto::Key enc_key, uint32_t level);
   BlockPointer Delete(Key k, BlockPointer root, crypto::Key enc_key);
   Block *Fetch(BlockPointer bp, crypto::Key enc_key);
-  BlockPointer TakeOneRec(BlockPointer current_bp, crypto::Key enc_key, bool &found, KeyValPair &res);
+  BlockPointer TakeOneRec(BlockPointer current_bp, crypto::Key enc_key, bool &found, KeyValPair &res, uint32_t level);
   BlockPointer Balance(BlockPointer root, crypto::Key enc_key);
   int8_t BalanceFactor(BlockPointer &bp, crypto::Key enc_key);
   uint8_t GetHeight(BlockPointer &bp, crypto::Key enc_key);

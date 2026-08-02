@@ -58,6 +58,12 @@ void OMap::FillWithDummies(crypto::Key enc_key) {
 }
 
 Val OMap::ReadAndRemove(Key k, crypto::Key enc_Key, bool &found) {
+  if (cache_.find(0) == cache_.end()) {
+    cache_[0] = Block(0, std::make_unique<uint8_t[]>(val_len_), 0);
+    std::fill_n(cache_[0].val_.get(), val_len_, 0);
+    cache_[0].meta_.height_ = 0;
+  }
+  
   auto replacement = Delete(k, root_, enc_Key);
   root_ = replacement;
   Val res = std::make_unique<uint8_t[]>(val_len_);
@@ -79,6 +85,12 @@ Val OMap::ReadAndRemove(Key k, crypto::Key enc_Key, bool &found) {
 }
 
 Val OMap::Read(Key k, crypto::Key enc_Key) {
+  if (cache_.find(0) == cache_.end()) {
+    cache_[0] = Block(0, std::make_unique<uint8_t[]>(val_len_), 0);
+    std::fill_n(cache_[0].val_.get(), val_len_, 0);
+    cache_[0].meta_.height_ = 0;
+  }
+  
   // Use a dummy InsertRec to securely fetch nodes on the path
   // without modifying their values. We set updated = true
   // so do_update is false.
@@ -104,15 +116,33 @@ Val OMap::Read(Key k, crypto::Key enc_Key) {
 }
 
 void OMap::Insert(Key k, Val v, crypto::Key enc_key, bool is_dummy) {
+  if (cache_.find(0) == cache_.end()) {
+    cache_[0] = Block(0, std::make_unique<uint8_t[]>(val_len_), 0);
+    std::fill_n(cache_[0].val_.get(), val_len_, 0);
+    cache_[0].meta_.height_ = 0;
+  }
+  
   ORKey new_key = next_key_++;
   bool inserted = false;
   bool updated = false;
+
+  cache_[new_key] = Block(k, nullptr, 1);
+  cache_[new_key].meta_.pos_ = oram_.GenerateRandomLeaf();
+  new_keys_.insert(new_key);
+  cache_[new_key].val_ = std::make_unique<uint8_t[]>(val_len_);
+  if (v)
+    std::copy_n(v.get(), val_len_, cache_[new_key].val_.get());
+  else
+    std::fill_n(cache_[new_key].val_.get(), val_len_, 0);
+
   root_ = InsertRec(k, v, root_, enc_key, 0, inserted, updated, new_key, is_dummy);
   
   inserted = sn::obliv::ct_select<bool>(false, inserted, is_dummy);
-  if (inserted) {
-    ++size_;
-  }
+  
+  cache_[new_key].meta_.key_ = sn::obliv::ct_select<ORKey>(k, 0, inserted);
+  
+  size_ += sn::obliv::ct_select<size_t>(1, 0, inserted);
+
   Finalize(enc_key);
 }
 
@@ -133,29 +163,22 @@ BlockPointer OMap::InsertRec(Key k, Val &v, BlockPointer root_bp,
   bool is_match = is_valid & sn::obliv::ct_eq<Key>(k, b->meta_.key_);
   bool do_update = is_match & !updated;
   updated = sn::obliv::ct_select<bool>(true, updated, do_update);
-  if (do_update) {
-    if (v)
-      std::copy_n(v.get(), val_len_, b->val_.get());
-    else
-      std::fill_n(b->val_.get(), val_len_, 0);
+  for (size_t i = 0; i < val_len_; ++i) {
+    uint8_t src_byte = v ? v.get()[i] : 0;
+    b->val_.get()[i] = sn::obliv::ct_select<uint8_t>(src_byte, b->val_.get()[i], do_update);
   }
 
   bool hit_leaf = !is_valid & !inserted & !updated & !is_dummy;
   inserted = sn::obliv::ct_select<bool>(true, inserted, hit_leaf);
 
-  if (hit_leaf) {
-    cache_[new_key] = Block(k, nullptr, 1);
-    cache_[new_key].meta_.pos_ = oram_.GenerateRandomLeaf();
-    cache_[new_key].val_ = std::make_unique<uint8_t[]>(val_len_);
-    if (v)
-      std::copy_n(v.get(), val_len_, cache_[new_key].val_.get());
-    else
-      std::fill_n(cache_[new_key].val_.get(), val_len_, 0);
-    current_bp.key_ = new_key;
-    current_bp.pos_ = cache_[new_key].meta_.pos_;
-    is_valid = true;
-    b = &cache_[new_key];
-  }
+  current_bp.key_ = sn::obliv::ct_select<ORKey>(new_key, current_bp.key_, hit_leaf);
+  current_bp.pos_ = sn::obliv::ct_select<ORPos>(cache_[new_key].meta_.pos_, current_bp.pos_, hit_leaf);
+  is_valid = sn::obliv::ct_select<bool>(true, is_valid, hit_leaf);
+
+  uintptr_t b_ptr = reinterpret_cast<uintptr_t>(b);
+  uintptr_t new_b_ptr = reinterpret_cast<uintptr_t>(&cache_[new_key]);
+  b_ptr = sn::obliv::ct_select<uintptr_t>(new_b_ptr, b_ptr, hit_leaf);
+  b = reinterpret_cast<Block *>(b_ptr);
 
   bool go_left = my_ct_lt<Key>(k, b->meta_.key_);
   BlockPointer child_bp;
@@ -230,6 +253,12 @@ BlockPointer OMap::DeleteRec(Key k, BlockPointer current_bp, crypto::Key enc_key
 }
 
 BlockPointer OMap::Delete(Key k, BlockPointer root_bp, crypto::Key enc_key) {
+  if (cache_.find(0) == cache_.end()) {
+    cache_[0] = Block(0, std::make_unique<uint8_t[]>(val_len_), 0);
+    std::fill_n(cache_[0].val_.get(), val_len_, 0);
+    cache_[0].meta_.height_ = 0;
+  }
+  
   delete_successful_ = false;
   return DeleteRec(k, root_bp, enc_key, 0);
 }
@@ -240,13 +269,6 @@ Block *OMap::Fetch(BlockPointer bp, crypto::Key enc_key) {
     // Pad access trace for dummy reads.
     ++accesses_before_finalize_;
     oram_.ReadAndRemove(0, 0, enc_key, false);
-
-    // We allocate a dummy val_ so that ct_select operations in Delete don't
-    // segfault on null pointers.
-    if (cache_.find(0) == cache_.end()) {
-      cache_[0] = Block(0, std::make_unique<uint8_t[]>(val_len_), 0);
-      std::fill_n(cache_[0].val_.get(), val_len_, 0);
-    }
     return &cache_[0];
   }
 
@@ -318,8 +340,6 @@ int8_t OMap::BalanceFactor(BlockPointer &bp, crypto::Key enc_key) {
 }
 
 uint8_t OMap::GetHeight(BlockPointer &bp, crypto::Key enc_key) {
-  if (!bp.key_)
-    return 0;
   Block *b = Fetch(bp, enc_key);
   bp.pos_ = b->meta_.pos_;
   return b->meta_.height_;
@@ -427,13 +447,19 @@ void OMap::Finalize(crypto::Key enc_key) {
   // Blocks in cache_ already contain their own updated new_leaf in meta_.pos_,
   // and their children's updated leaves in meta_.l_.pos_ and meta_.r_.pos_.
   for (auto &c : cache_) {
+    Block &b = c.second;
     ORKey ok = c.first;
-    auto &b = c.second;
-    ORPos op = b.meta_.pos_;
+    static_path_oram::Pos op = b.meta_.pos_;
     auto ov = b.ToBytes(val_len_);
     b.val_.reset();
-    oram_.Insert({op, ok, std::move(ov)}, enc_key);
+    bool is_new = new_keys_.count(ok) > 0;
+    
+    // If the block is the unused pre-allocated block, its meta_.key_ was set to 0.
+    // We must pass 0 as the ORKey to write it as a dummy, otherwise we pass ok.
+    ORKey final_ok = sn::obliv::ct_select<ORKey>(0, ok, sn::obliv::ct_eq<Key>(b.meta_.key_, 0));
+    oram_.Insert({op, final_ok, std::move(ov)}, enc_key, true, is_new);
   }
+  new_keys_.clear();
   auto writes_done = cache_.size();
   cache_.clear();
 
@@ -448,17 +474,20 @@ void OMap::Finalize(crypto::Key enc_key) {
 
 
 
-BlockPointer OMap::TakeOneRec(BlockPointer current_bp, crypto::Key enc_key, bool &found, KeyValPair &res) {
-  if (current_bp.key_ == 0) return current_bp;
+BlockPointer OMap::TakeOneRec(BlockPointer current_bp, crypto::Key enc_key, bool &found, KeyValPair &res, uint32_t level) {
+  if (level >= max_depth_) return current_bp;
   
   Block *b = Fetch(current_bp, enc_key);
   
   bool is_tombstone = true;
-  if (b->val_) {
-    for (size_t j = 0; j < val_len_; ++j) {
-      if (b->val_[j] != 0) is_tombstone = false;
-    }
+  for (size_t j = 0; j < val_len_; ++j) {
+    uint8_t byte = b->val_ ? b->val_.get()[j] : 0;
+    bool is_non_zero = !sn::obliv::ct_eq<uint8_t>(byte, 0);
+    is_tombstone = sn::obliv::ct_select<bool>(false, is_tombstone, is_non_zero);
   }
+  // If the node is a dummy node, treat it as a tombstone
+  bool is_dummy = sn::obliv::ct_eq<ORKey>(current_bp.key_, 0);
+  is_tombstone = sn::obliv::ct_select<bool>(true, is_tombstone, is_dummy);
   
   bool is_target = !is_tombstone & !found;
   found = sn::obliv::ct_select<bool>(true, found, is_target);
@@ -473,20 +502,26 @@ BlockPointer OMap::TakeOneRec(BlockPointer current_bp, crypto::Key enc_key, bool
     b->val_.get()[j] = sn::obliv::ct_select<uint8_t>(0, v, is_target);
   }
   
-  b->meta_.l_ = TakeOneRec(b->meta_.l_, enc_key, found, res);
-  b->meta_.r_ = TakeOneRec(b->meta_.r_, enc_key, found, res);
+  b->meta_.l_ = TakeOneRec(b->meta_.l_, enc_key, found, res, level + 1);
+  b->meta_.r_ = TakeOneRec(b->meta_.r_, enc_key, found, res, level + 1);
   
   current_bp.pos_ = b->meta_.pos_;
   return current_bp;
 }
 
 KeyValPair OMap::TakeOne(crypto::Key enc_key, bool &found) {
+  if (cache_.find(0) == cache_.end()) {
+    cache_[0] = Block(0, std::make_unique<uint8_t[]>(val_len_), 0);
+    std::fill_n(cache_[0].val_.get(), val_len_, 0);
+    cache_[0].meta_.height_ = 0;
+  }
+  
   found = false;
   KeyValPair res;
   res.key_ = 0;
   res.val_ = std::make_unique<uint8_t[]>(val_len_);
   std::fill_n(res.val_.get(), val_len_, 0);
-  root_ = TakeOneRec(root_, enc_key, found, res);
+  root_ = TakeOneRec(root_, enc_key, found, res, 0);
   Finalize(enc_key);
   return res;
 }

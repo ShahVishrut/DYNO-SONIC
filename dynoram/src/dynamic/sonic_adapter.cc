@@ -178,13 +178,13 @@ static_path_oram::Block SonicORamAdapter::Read(static_path_oram::Pos p, static_p
   return res;
 }
 
-void SonicORamAdapter::Insert(static_path_oram::Block block, crypto::Key enc_key, bool is_real) {
-  static_path_oram::Key k = block.meta_.key_;
+void SonicORamAdapter::Insert(static_path_oram::Block block, crypto::Key enc_key, bool is_real, bool is_new) {
+  uint64_t k = block.meta_.key_;
   bool real = is_real & !sn::obliv::ct_eq<uint64_t>(k, 0);
-  uint64_t write_leaf = sn::obliv::ct_select<uint64_t>(block.meta_.pos_ - 1, 0, real);
-  
-  uint64_t cur_leaf = write_leaf;
+  uint64_t cur_leaf = 0;
+  uint64_t write_leaf = 0;
   if (impl_->with_pos_map) {
+    bool has_leaf = false;
     uint64_t found_leaf = UINT64_MAX;
     write_leaf = impl_->GenerateLeaf();
     for (size_t i = 1; i <= capacity_; ++i) {
@@ -192,10 +192,18 @@ void SonicORamAdapter::Insert(static_path_oram::Block block, crypto::Key enc_key
       found_leaf = sn::obliv::ct_select<uint64_t>(impl_->pos_map[i], found_leaf, match);
       impl_->pos_map[i] = sn::obliv::ct_select<uint64_t>(write_leaf, impl_->pos_map[i], match);
     }
-    bool has_leaf = !sn::obliv::ct_eq<uint64_t>(found_leaf, UINT64_MAX);
+    has_leaf = !sn::obliv::ct_eq<uint64_t>(found_leaf, UINT64_MAX);
     cur_leaf = sn::obliv::ct_select<uint64_t>(found_leaf, impl_->GenerateLeaf(), has_leaf);
+    
+    // If it was not in the pos_map, it is a brand new bucket.
+    if (found_leaf == UINT64_MAX) {
+      is_new = true;
+    }
+  } else {
+    write_leaf = sn::obliv::ct_select<uint64_t>(block.meta_.pos_ - 1, 0, real);
+    cur_leaf = write_leaf;
   }
-
+  
   sn::oram::access_request req;
   req.address = sn::obliv::ct_select<uint64_t>(k - 1, capacity_, real);
   req.cur_leaf = cur_leaf;
@@ -213,7 +221,15 @@ void SonicORamAdapter::Insert(static_path_oram::Block block, crypto::Key enc_key
   req.out = sn::util::span<uint8_t>(out_buf);
 
   auto pre_ops = impl_->client->state_ref().metrics_snapshot().access_ops;
-  impl_->client->access(req, impl_->scratch);
+  if (is_new && real) {
+    sn::oram::tree::block<kSonicBlockBytes> new_block{};
+    new_block.address = k - 1;
+    new_block.leaf_ix = write_leaf;
+    std::copy(in_buf.begin(), in_buf.end(), new_block.data.begin());
+    impl_->client->insert(new_block);
+  } else {
+    impl_->client->access(req, impl_->scratch);
+  }
   auto post_ops = impl_->client->state_ref().metrics_snapshot().access_ops;
   memory_access_count_ += (post_ops - pre_ops);
   memory_bytes_moved_total_ += (post_ops - pre_ops) * kSonicBlockBytes * 2;

@@ -151,14 +151,16 @@ public:
 
     auto guard = store_.pin(storage::pin_mode::exclusive);
 
-    // at setup time, all blocks are dummy, so we can just make a completely random permutation
+    // at setup time, all blocks are dummy
     fill_dummy_slots(guard.data(), uid_gen);
     sn::obliv::fill(real_addresses_.begin(), real_addresses_.end(), block_t::dummy_address);
 
-    // shuffle offsets
-    shuffle_offsets(prng);
-    // reorder blocks to permutation
-    reorder_blocks(guard.data());
+    // OPTIMIZATION: Instead of a cryptographic bitonic shuffle (which takes 33s for 4M nodes),
+    // we simply write a sequential permutation since all blocks are dummy anyway!
+    for (std::uint32_t i = 0; i < slot_count_; ++i) {
+      permutation_[i] = static_cast<std::uint8_t>(i);
+      guard.data()[i].extra = i;
+    }
 
     guard.mark_dirty();
 

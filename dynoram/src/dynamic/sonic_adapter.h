@@ -21,8 +21,8 @@ class SonicORamAdapter {
 
   static_path_oram::Block ReadAndRemove(static_path_oram::Pos p, static_path_oram::Key k, crypto::Key enc_key, bool is_real = true);
   static_path_oram::Block Read(static_path_oram::Pos p, static_path_oram::Key k, crypto::Key enc_key, bool is_real = true);
-  void Insert(static_path_oram::Block block, crypto::Key enc_key, bool is_real = true);
-  
+  void Insert(static_path_oram::Block block, crypto::Key enc_key, bool is_real = true, bool is_new = false);
+
   [[nodiscard]] uint64_t GenerateRandomLeaf() const;
   
   [[nodiscard]] size_t Capacity() const { return capacity_; }
@@ -34,6 +34,7 @@ class SonicORamAdapter {
   size_t val_len_;
   uint64_t memory_access_count_ = 0;
   uint64_t memory_bytes_moved_total_ = 0;
+  bool lazy_mode_ = false;
 
   // Opaque pointer to hide Sonic details from the header
   struct Impl;

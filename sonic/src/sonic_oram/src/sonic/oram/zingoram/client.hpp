@@ -87,6 +87,25 @@ public:
     }
   }
 
+  void insert(const block_t& new_block) {
+    state_.metrics_ref().record_access();
+    sn_prof_zone("zingoram.insert");
+    
+    // Drop the new block straight into the global stash
+    fz_stash::insert_pathread(state_.stash(), new_block);
+
+    // Tick the eviction gate to naturally pack the stash into the tree over time
+    auto ticket = gate_.enter();
+    const bool leader = ticket.release();
+    if (leader) {
+      ticket.wait_until_drained();
+      ticket.begin_eviction();
+      state_.ensure_eviction_scratch_capacity(eviction_workers_.logical_threads());
+      evict<Traits>(state_, eviction_schedule_, eviction_workers_);
+      ticket.finish_eviction();
+    }
+  }
+
   void flush_epoch() {
     if constexpr (!disjoint_epoch_mode) {
       sn::util::log::fail("zingoram::client: flush_epoch is only available in disjoint epoch mode");

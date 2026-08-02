@@ -98,6 +98,7 @@ class OHeap {
   void Insert(Key k, Val v, crypto::Key enc_key, bool is_dummy = false);
   void DummyAccess(crypto::Key enc_key, bool with_find_min = true);
   void FillWithDummies(crypto::Key enc_key);
+  
   [[nodiscard]] size_t Capacity() const { return capacity_; }
   [[nodiscard]] size_t Size() const { return size_; }
   [[nodiscard]] Pos GeneratePos() const;
