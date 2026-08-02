@@ -174,6 +174,11 @@ void OHeap::FillWithDummies(crypto::Key enc_key) {
   ++memory_access_count_;
   memory_access_bytes_total_ += num_buckets_ * EncryptedBucketSize(val_len_);
   Bucket empty;
+  empty.meta_.flags_ = 0;
+  for (int j = 0; j < kBucketSize; ++j) {
+      empty.blocks_[j] = dyno::static_path_oheap::Block(true);
+  }
+  empty.min_block_ = dyno::static_path_oheap::Block(true);
 
   for (size_t i = 0; i < num_buckets_; ++i) {
     dyno::static_path_oram::Block b(true);
