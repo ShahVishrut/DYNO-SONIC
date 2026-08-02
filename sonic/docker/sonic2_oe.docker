@@ -1,0 +1,244 @@
+# FROM openenclavedockerregistry.azurecr.io/oetools-20.04:latest
+
+ARG ubuntu_version=22.04
+
+FROM ubuntu:${ubuntu_version}
+
+ARG UNAME=user
+ARG GNAME=user
+
+ARG UID=1000
+ARG GID=1000
+
+ARG cmake_version=4.1.2
+ARG ninja_version=1.13.1
+ARG node_version=22.20.0
+ARG python_version=3.14
+ARG ripgrep_release=15.0.0
+ARG ripgrep_package_version=15.0.0-1
+ARG fd_version=9.0.0
+ARG bat_version=0.24.0
+ARG fzf_version=0.66.0
+
+# workaround for https://githubmemory.com/repo/pypa/pip/issues/10219
+ENV LANG=C.UTF-8
+ENV LC_ALL=C.UTF-8
+
+# install essential packages
+RUN apt update && \
+    apt -y --no-install-recommends upgrade && \
+    DEBIAN_FRONTEND=noninteractive apt -y install \
+    make build-essential apt-transport-https unzip sudo \
+    python3-pip pipx \
+    git jq vim curl wget netcat \
+    ccache ninja-build cmake \
+    && apt clean && \
+    rm -rf rm /var/lib/apt/lists/*
+
+# install additional packages
+RUN apt update && \
+    DEBIAN_FRONTEND=noninteractive apt install -y \
+    sudo bash zsh curl wget make git \
+    python3-distutils \
+    && apt clean && rm -rf /var/lib/apt/lists/*
+
+# install meson
+RUN pip3 install meson
+
+# install poetry
+RUN zsh -c 'pipx ensurepath' && pipx install poetry \
+    && echo "PATH=$PATH:/root/.local/bin" >> /root/.bash_profile
+
+# run ansible to install all dependencies
+# COPY ./scripts/ansible /ansible
+# COPY ./scripts/lvi-mitigation /lvi-mitigation
+RUN git clone https://github.com/openenclave/openenclave.git ~/openenclave \
+    && cp -r ~/openenclave/scripts/ansible /ansible \
+    && cp -r ~/openenclave/scripts/lvi-mitigation /lvi-mitigation \
+    && /ansible/install-ansible.sh && \
+    ansible localhost --playbook-dir=/ansible -m import_role -a "name=linux/docker tasks_from=ci-setup.yml" -vvv && \
+    /ansible/remove-ansible.sh && \
+    apt autoremove -y && \
+    apt clean && \
+    rm -rf /ansible /lvi-mitigation /root/.cache /root/.ansible /var/lib/apt/lists/* \
+    && rm -rf ~/openenclave
+
+# configure git for some ms stuff
+RUN git config --global user.email "oeciteam@microsoft.com"
+RUN git config --global user.name "OE CI Team"
+
+# create user
+RUN groupadd --gid ${GID} ${GNAME}
+RUN useradd --create-home --uid ${UID} --gid ${GID} --shell /bin/bash ${UNAME}
+RUN echo "${UNAME} ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
+
+# build and install openenclave sdk
+RUN git clone --recursive https://github.com/openenclave/openenclave.git ~/openenclave \
+    && cd ~/openenclave \
+    && mkdir build \
+    && cd build \
+    && cmake .. -G Ninja \
+    && ninja \
+    && ninja install \
+    && ls /opt/openenclave \
+    && rm -rf ~/openenclave \
+    && echo "source /opt/openenclave/share/openenclave/openenclaverc" >> /root/.bash_profile
+
+# configure zsh
+RUN true \
+    && ARCH="$(dpkg --print-architecture)" \
+    && case "${ARCH}" in \
+        amd64) FZF_ARCH="linux_amd64";; \
+        arm64) FZF_ARCH="linux_arm64";; \
+        *) echo "Unsupported architecture: ${ARCH}" >&2; exit 1;; \
+    esac \
+    && curl -fsSL "https://github.com/junegunn/fzf/releases/download/v${fzf_version}/fzf-${fzf_version}-${FZF_ARCH}.tar.gz" -o /tmp/fzf.tar.gz \
+    && mkdir -p /root/.fzf/bin \
+    && tar -xzf /tmp/fzf.tar.gz -C /root/.fzf/bin \
+    && rm /tmp/fzf.tar.gz \
+    && ln -sf /root/.fzf/bin/fzf /usr/local/bin/fzf \
+    && sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" \
+    # edit the config to add fzf to plugins
+    && sed -i 's/plugins=(git)/plugins=(fzf)/g' /root/.zshrc \
+    # install zsh-autosuggestions
+    && git clone https://github.com/zsh-users/zsh-autosuggestions /root/.oh-my-zsh/custom/plugins/zsh-autosuggestions \
+    # install zsh-syntax-highlighting
+    && git clone https://github.com/zsh-users/zsh-syntax-highlighting /root/.oh-my-zsh/custom/plugins/zsh-syntax-highlighting \
+    # change the theme
+    && sed -i 's/ZSH_THEME="robbyrussell"/ZSH_THEME="cypher"/g' /root/.zshrc \
+    # set default shell
+    && usermod --shell /bin/zsh root \
+    # source bash_profile in zshrc
+    && echo "source ~/.bash_profile" >> /root/.zshrc \
+    # set hostname
+    && echo "oedev" > /etc/hostname \
+    && echo "zsh configured" \
+    && ln -sf /root/.fzf/bin/fzf /usr/local/bin/fzf
+
+# install node.js 22.x with nvm and update npm
+ENV NVM_DIR=/root/.nvm
+RUN bash -lc 'set -euxo pipefail; \
+    export NVM_DIR="${HOME}/.nvm"; \
+    curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash; \
+    source "${NVM_DIR}/nvm.sh"; \
+    nvm install ${node_version}; \
+    nvm alias default ${node_version}; \
+    nvm use default; \
+    NODE_BIN_DIR="${NVM_DIR}/versions/node/$(nvm version default)/bin"; \
+    ln -sf "${NODE_BIN_DIR}/node" /usr/local/bin/node; \
+    ln -sf "${NODE_BIN_DIR}/npm" /usr/local/bin/npm; \
+    ln -sf "${NODE_BIN_DIR}/npx" /usr/local/bin/npx; \
+    npm install -g npm@latest; \
+    node -v; \
+    npm -v'
+
+# install newer cmake and ninja
+RUN set -eux; \
+    ARCH="$(dpkg --print-architecture)"; \
+    case "${ARCH}" in \
+        amd64) CMAKE_ARCH="linux-x86_64"; NINJA_PACKAGE="ninja-linux.zip";; \
+        arm64) CMAKE_ARCH="linux-aarch64"; NINJA_PACKAGE="ninja-linux-aarch64.zip";; \
+        *) echo "Unsupported architecture: ${ARCH}" >&2; exit 1;; \
+    esac; \
+    curl -fsSL "https://github.com/Kitware/CMake/releases/download/v${cmake_version}/cmake-${cmake_version}-${CMAKE_ARCH}.tar.gz" -o /tmp/cmake.tar.gz; \
+    tar -C /opt -xzf /tmp/cmake.tar.gz; \
+    rm /tmp/cmake.tar.gz; \
+    for tool in cmake ccmake cpack ctest; do \
+        if [ -f "/opt/cmake-${cmake_version}-${CMAKE_ARCH}/bin/${tool}" ]; then \
+            ln -sf "/opt/cmake-${cmake_version}-${CMAKE_ARCH}/bin/${tool}" "/usr/local/bin/${tool}"; \
+        fi; \
+    done; \
+    if [ "${ARCH}" = "amd64" ]; then \
+        curl -fsSL "https://github.com/ninja-build/ninja/releases/download/v${ninja_version}/${NINJA_PACKAGE}" -o /tmp/ninja.zip; \
+        unzip -oq /tmp/ninja.zip -d /usr/local/bin; \
+        chmod +x /usr/local/bin/ninja; \
+        rm -f /tmp/ninja.zip; \
+    else \
+        ln -sf /usr/bin/ninja /usr/local/bin/ninja; \
+    fi; \
+    ninja --version
+
+# install python build (3.14) and modern tooling
+RUN set -eux; \
+    DEBIAN_FRONTEND=noninteractive apt-get update; \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y \
+        build-essential \
+        libbz2-dev \
+        libexpat1-dev \
+        libffi-dev \
+        libgdbm-compat-dev \
+        libgdbm-dev \
+        liblzma-dev \
+        libncursesw5-dev \
+        libnss3-dev \
+        libreadline-dev \
+        libsqlite3-dev \
+        libssl-dev \
+        libuuid1 \
+        tk-dev \
+        uuid-dev \
+        xz-utils \
+        zlib1g-dev; \
+    rm -rf /var/lib/apt/lists/*; \
+    TMPDIR="$(mktemp -d)"; \
+    PYTHON_PREFIX="/opt/python-${python_version}"; \
+    curl -fsSL "https://github.com/python/cpython/archive/refs/heads/${python_version}.tar.gz" -o "${TMPDIR}/cpython.tar.gz"; \
+    mkdir -p "${TMPDIR}/cpython-src"; \
+    tar -xzf "${TMPDIR}/cpython.tar.gz" -C "${TMPDIR}/cpython-src" --strip-components=1; \
+    cd "${TMPDIR}/cpython-src"; \
+    ./configure --prefix="${PYTHON_PREFIX}" --enable-optimizations --with-ensurepip=install; \
+    make -j"$(nproc)"; \
+    make install; \
+    ln -sf "${PYTHON_PREFIX}/bin/python3" /usr/local/bin/python3; \
+    ln -sf "${PYTHON_PREFIX}/bin/python3" "/usr/local/bin/python${python_version}"; \
+    ln -sf "${PYTHON_PREFIX}/bin/pip3" /usr/local/bin/pip3; \
+    python3 --version; \
+    pip3 --version; \
+    rm -rf "${TMPDIR}"
+
+RUN set -eux; \
+    PYTHON_PREFIX="/opt/python-${python_version}"; \
+    python3 -m pip install --upgrade pip setuptools wheel; \
+    python3 -m pip install --upgrade meson; \
+    python3 -m pip install --upgrade pipx; \
+    ln -sf "${PYTHON_PREFIX}/bin/pipx" /usr/local/bin/pipx; \
+    PIPX_HOME=/opt/pipx PIPX_BIN_DIR=/usr/local/bin python3 -m pipx install --force poetry; \
+    curl -LsSf https://astral.sh/uv/install.sh | sh; \
+    curl -fsSL https://bun.sh/install | bash; \
+    ln -sf /root/.local/bin/uv /usr/local/bin/uv; \
+    ln -sf /root/.bun/bin/bun /usr/local/bin/bun; \
+    poetry --version; \
+    uv --version; \
+    bun --version
+
+# install other utilities (ripgrep, fd, bat)
+RUN set -eux; \
+    ARCH="$(dpkg --print-architecture)"; \
+    apt-get update; \
+    if [ "${ARCH}" = "amd64" ]; then \
+        curl -fsSL "https://github.com/BurntSushi/ripgrep/releases/download/${ripgrep_release}/ripgrep_${ripgrep_package_version}_amd64.deb" -o /tmp/ripgrep.deb; \
+        curl -fsSL "https://github.com/sharkdp/fd/releases/download/v${fd_version}/fd_${fd_version}_amd64.deb" -o /tmp/fd.deb; \
+        curl -fsSL "https://github.com/sharkdp/bat/releases/download/v${bat_version}/bat_${bat_version}_amd64.deb" -o /tmp/bat.deb; \
+        DEBIAN_FRONTEND=noninteractive apt-get install -y /tmp/ripgrep.deb /tmp/fd.deb /tmp/bat.deb; \
+        rm -f /tmp/ripgrep.deb /tmp/fd.deb /tmp/bat.deb; \
+    elif [ "${ARCH}" = "arm64" ]; then \
+        curl -fsSL "https://github.com/BurntSushi/ripgrep/releases/download/${ripgrep_release}/ripgrep-${ripgrep_release}-aarch64-unknown-linux-gnu.tar.gz" -o /tmp/ripgrep.tar.gz; \
+        tar -xzf /tmp/ripgrep.tar.gz -C /tmp; \
+        install -m 0755 "/tmp/ripgrep-${ripgrep_release}-aarch64-unknown-linux-gnu/rg" /usr/local/bin/rg; \
+        rm -rf /tmp/ripgrep.tar.gz "/tmp/ripgrep-${ripgrep_release}-aarch64-unknown-linux-gnu"; \
+        curl -fsSL "https://github.com/sharkdp/fd/releases/download/v${fd_version}/fd_${fd_version}_arm64.deb" -o /tmp/fd.deb; \
+        curl -fsSL "https://github.com/sharkdp/bat/releases/download/v${bat_version}/bat_${bat_version}_arm64.deb" -o /tmp/bat.deb; \
+        DEBIAN_FRONTEND=noninteractive apt-get install -y /tmp/fd.deb /tmp/bat.deb; \
+        rm -f /tmp/fd.deb /tmp/bat.deb; \
+    else \
+        echo "Unsupported architecture: ${ARCH}" >&2; \
+        exit 1; \
+    fi; \
+    apt-get clean; \
+    rm -rf /var/lib/apt/lists/*
+
+# workdir in /prj which should always be mounted
+WORKDIR /prj
+
+# default to running zsh
+CMD ["/bin/zsh", "-l"]

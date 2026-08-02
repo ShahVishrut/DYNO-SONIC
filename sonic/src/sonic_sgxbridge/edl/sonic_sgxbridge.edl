@@ -1,0 +1,210 @@
+enclave {
+    from "sgx_tstdc.edl" import *;
+    from "sgx_pthread.edl" import *;
+
+    trusted {
+        public uint32_t sonic_sgxbridge_threadpool_worker_entry(uint64_t pool_id, uint32_t worker_index);
+    };
+
+    untrusted {
+        sgx_status_t sonic_sgxbridge_log_sink([user_check] void* host_state, [in, string] const char* message);
+        sgx_status_t sonic_sgxbridge_calculate_cycle_scale([user_check] void* host_state, [out] double* ns_per_cycle);
+        sgx_status_t sonic_sgxbridge_sleep_ms([user_check] void* host_state, uint32_t millis);
+        sgx_status_t sonic_sgxbridge_query_time_ns([user_check] void* host_state, [out] uint64_t* out_nanoseconds);
+
+        sgx_status_t sonic_sgxbridge_threadpool_host_create(
+            [user_check] void* host_state,
+            uint64_t pool_id,
+            uint32_t worker_count,
+            uint32_t queue_capacity,
+            uint32_t queue_policy,
+            [out] void** out_handshake,
+            [out] uint32_t* out_status,
+            [out] uint32_t* out_detail
+        );
+        sgx_status_t sonic_sgxbridge_threadpool_host_destroy(
+            [user_check] void* host_state,
+            uint64_t pool_id,
+            [out] uint32_t* out_status,
+            [out] uint32_t* out_detail
+        );
+
+        sgx_status_t sonic_sgxbridge_hostbuf_create(
+            [user_check] void* host_state,
+            size_t size,
+            [out] void** out_ptr,
+            [out] size_t* out_size,
+            [out] uint64_t* out_id,
+            [out] uint32_t* out_status
+        );
+        sgx_status_t sonic_sgxbridge_hostbuf_release(
+            [user_check] void* host_state,
+            uint64_t id,
+            [out] uint32_t* out_status
+        );
+        sgx_status_t sonic_sgxbridge_hostbuf_view(
+            [user_check] void* host_state,
+            uint64_t id,
+            [out] void** out_ptr,
+            [out] size_t* out_size,
+            [out] uint32_t* out_status
+        );
+
+        sgx_status_t sonic_sgxbridge_storage_open(
+            [user_check] void* host_state,
+            [in, string] const char* data_path,
+            [in, string] const char* meta_path,
+            uint8_t create,
+            uint8_t truncate,
+            [out] uint64_t* out_handle,
+            [out] uint32_t* out_status
+        );
+        sgx_status_t sonic_sgxbridge_storage_close(
+            [user_check] void* host_state,
+            uint64_t handle,
+            [out] uint32_t* out_status
+        );
+        sgx_status_t sonic_sgxbridge_storage_resize(
+            [user_check] void* host_state,
+            uint64_t handle,
+            uint64_t pages,
+            size_t data_bytes,
+            size_t meta_bytes,
+            [out] uint32_t* out_status
+        );
+        sgx_status_t sonic_sgxbridge_storage_read_data(
+            [user_check] void* host_state,
+            uint64_t handle,
+            uint64_t page_id,
+            [user_check] void* dst,
+            size_t bytes,
+            [out] uint32_t* out_status
+        );
+        sgx_status_t sonic_sgxbridge_storage_write_data(
+            [user_check] void* host_state,
+            uint64_t handle,
+            uint64_t page_id,
+            [user_check] const void* src,
+            size_t bytes,
+            [out] uint32_t* out_status
+        );
+        sgx_status_t sonic_sgxbridge_storage_read_meta(
+            [user_check] void* host_state,
+            uint64_t handle,
+            uint64_t page_id,
+            [user_check] void* dst,
+            size_t bytes,
+            [out] uint32_t* out_status
+        );
+        sgx_status_t sonic_sgxbridge_storage_write_meta(
+            [user_check] void* host_state,
+            uint64_t handle,
+            uint64_t page_id,
+            [user_check] const void* src,
+            size_t bytes,
+            [out] uint32_t* out_status
+        );
+        sgx_status_t sonic_sgxbridge_storage_write_pages(
+            [user_check] void* host_state,
+            uint64_t handle,
+            size_t page_count,
+            [in, count=page_count] const uint64_t* page_ids,
+            [user_check] const void* data,
+            [user_check] const void* meta,
+            size_t data_bytes_per_page,
+            size_t meta_bytes_per_page,
+            [out] uint32_t* out_status
+        );
+        sgx_status_t sonic_sgxbridge_storage_flush(
+            [user_check] void* host_state,
+            uint64_t handle,
+            [out] uint32_t* out_status
+        );
+        sgx_status_t sonic_sgxbridge_fs_remove(
+            [user_check] void* host_state,
+            [in, string] const char* path,
+            [out] uint8_t* out_removed,
+            [out] uint32_t* out_status
+        );
+        sgx_status_t sonic_sgxbridge_fs_remove_all(
+            [user_check] void* host_state,
+            [in, string] const char* path,
+            [out] uint64_t* out_removed,
+            [out] uint32_t* out_status
+        );
+        sgx_status_t sonic_sgxbridge_fs_exists(
+            [user_check] void* host_state,
+            [in, string] const char* path,
+            [out] uint8_t* out_exists,
+            [out] uint32_t* out_status
+        );
+        sgx_status_t sonic_sgxbridge_fs_create_directories(
+            [user_check] void* host_state,
+            [in, string] const char* path,
+            [out] uint8_t* out_created,
+            [out] uint32_t* out_status
+        );
+        sgx_status_t sonic_sgxbridge_fs_rename(
+            [user_check] void* host_state,
+            [in, string] const char* from_path,
+            [in, string] const char* to_path,
+            [out] uint8_t* out_renamed,
+            [out] uint32_t* out_status
+        );
+        sgx_status_t sonic_sgxbridge_fs_copy_file(
+            [user_check] void* host_state,
+            [in, string] const char* from_path,
+            [in, string] const char* to_path,
+            uint8_t overwrite_existing,
+            [out] uint8_t* out_copied,
+            [out] uint32_t* out_status
+        );
+        sgx_status_t sonic_sgxbridge_fs_file_size(
+            [user_check] void* host_state,
+            [in, string] const char* path,
+            [out] uint64_t* out_size,
+            [out] uint32_t* out_status
+        );
+
+        sgx_status_t sonic_sgxbridge_dist_rank([user_check] void* host_state, [out] int* out_rank);
+        sgx_status_t sonic_sgxbridge_dist_world_size([user_check] void* host_state, [out] int* out_world);
+        sgx_status_t sonic_sgxbridge_dist_send_from_hostbuf(
+            [user_check] void* host_state,
+            int dest_rank,
+            uint64_t buffer_id,
+            size_t offset,
+            size_t len
+        );
+        sgx_status_t sonic_sgxbridge_dist_try_recv(
+            [user_check] void* host_state,
+            [out] int* out_has_msg,
+            [out] int* out_src_rank,
+            [out] uint64_t* out_id,
+            [out] size_t* out_size
+        );
+        sgx_status_t sonic_sgxbridge_dist_recv(
+            [user_check] void* host_state,
+            [out] int* out_src_rank,
+            [out] uint64_t* out_id,
+            [out] size_t* out_size
+        );
+        sgx_status_t sonic_sgxbridge_dist_recv_for(
+            [user_check] void* host_state,
+            uint64_t timeout_ms,
+            [out] int* out_has_msg,
+            [out] int* out_src_rank,
+            [out] uint64_t* out_id,
+            [out] size_t* out_size
+        );
+        sgx_status_t sonic_sgxbridge_dist_pending_messages(
+            [user_check] void* host_state,
+            [out] size_t* out_count
+        );
+        sgx_status_t sonic_sgxbridge_dist_barrier([user_check] void* host_state);
+        sgx_status_t sonic_sgxbridge_dist_allreduce_sum(
+            [user_check] void* host_state,
+            double local_value,
+            [out] double* out_value
+        );
+    };
+};

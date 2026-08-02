@@ -1,0 +1,313 @@
+# sgx development container
+ARG ubuntu_version=24.04
+
+FROM ubuntu:${ubuntu_version}
+
+ARG UNAME=user
+ARG GNAME=user
+ARG UID=1000
+ARG GID=1000
+
+ARG gcc_version=14
+ARG clang_version=18
+ARG cmake_version=4.1.2
+ARG ninja_version=1.13.1
+ARG linux_sgx_ref=main
+ARG sgx_sdk_version=2.27.100.1
+ARG sgx_repo_base=https://download.01.org/intel-sgx/sgx-linux/2.27/distro/ubuntu24.04-server
+ARG node_version=22.20.0
+ARG ripgrep_release=15.0.0
+ARG ripgrep_package_version=15.0.0-1
+ARG fd_version=9.0.0
+ARG bat_version=0.24.0
+ARG fzf_version=0.66.0
+
+ENV LANG=C.UTF-8 \
+    LC_ALL=C.UTF-8 \
+    DEBIAN_FRONTEND=noninteractive \
+    SGX_SDK=/opt/intel/sgxsdk \
+    PIPX_HOME=/opt/pipx \
+    PIPX_BIN_DIR=/usr/local/bin \
+    BUN_INSTALL=/opt/bun \
+    OMPI_ALLOW_RUN_AS_ROOT=1 \
+    OMPI_ALLOW_RUN_AS_ROOT_CONFIRM=1
+
+# ensure build only targets x86_64
+RUN set -eux; \
+    if [ "$(dpkg --print-architecture)" != "amd64" ]; then \
+        echo "Intel SGX SDK requires the amd64 architecture." >&2; \
+        exit 1; \
+    fi
+
+# base system packages
+RUN set -eux; \
+    apt-get update; \
+    apt-get -y dist-upgrade; \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        apt-transport-https \
+        build-essential \
+        ca-certificates \
+        capnproto \
+        ccache \
+        libcapnp-dev \
+        curl \
+        git \
+        gnupg \
+        gdb \
+        libboost-dev \
+        libboost-system-dev \
+        libboost-thread-dev \
+        libcurl4-openssl-dev \
+        libprotobuf-dev \
+        libssl-dev \
+        libopenmpi-dev \
+        openssh-client \
+        openssh-server \
+        lsb-release \
+        make \
+        nasm \
+        ninja-build \
+        ocaml \
+        ocamlbuild \
+        pkg-config \
+        protobuf-compiler \
+        python-is-python3 \
+        python3 \
+        python3-pip \
+        python3-setuptools \
+        python3-venv \
+        python3-wheel \
+        pipx \
+        software-properties-common \
+        sudo \
+        zsh \
+        unzip \
+        wget \
+        xz-utils; \
+    rm -rf /var/lib/apt/lists/*
+
+# sgx hardware runtime packages
+RUN set -eux; \
+    tmpdir="$(mktemp -d)"; \
+    curl -fsSL "${sgx_repo_base}/sgx_debian_local_repo.tgz" -o "${tmpdir}/sgx_repo.tgz"; \
+    mkdir -p /opt/intel; \
+    tar -xzf "${tmpdir}/sgx_repo.tgz" -C /opt/intel; \
+    rm -rf "${tmpdir}"; \
+    echo "deb [trusted=yes] file:/opt/intel/sgx_debian_local_repo noble main" > /etc/apt/sources.list.d/intel-sgx-local.list; \
+    apt-get update; \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        libsgx-enclave-common \
+        libsgx-uae-service \
+        libsgx-launch \
+        libsgx-quote-ex \
+        libsgx-urts; \
+    rm -rf /var/lib/apt/lists/*
+
+# sshd + client defaults for containerized mpi fanout
+RUN set -eux; \
+    mkdir -p /var/run/sshd; \
+    printf 'Host *\n  StrictHostKeyChecking no\n  UserKnownHostsFile /dev/null\n' >> /etc/ssh/ssh_config; \
+    sed -i 's/^#*PermitRootLogin.*/PermitRootLogin prohibit-password/' /etc/ssh/sshd_config; \
+    sed -i 's/^#*PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config; \
+    if ! grep -q '^Port 2222' /etc/ssh/sshd_config; then echo 'Port 2222' >> /etc/ssh/sshd_config; fi
+
+# modern gcc toolchain
+RUN set -eux; \
+    apt-get update; \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        gcc-${gcc_version} \
+        g++-${gcc_version}; \
+    update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-${gcc_version} 100; \
+    update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-${gcc_version} 100; \
+    rm -rf /var/lib/apt/lists/*
+
+# modern clang toolchain
+RUN set -eux; \
+    apt-get update; \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        clang-${clang_version} \
+        clang-format-${clang_version} \
+        clang-tidy-${clang_version} \
+        clang-tools-${clang_version} \
+        libc++-${clang_version}-dev \
+        libc++abi-${clang_version}-dev \
+        lld-${clang_version} \
+        llvm-${clang_version}; \
+    update-alternatives --install /usr/bin/clang clang /usr/bin/clang-${clang_version} 100; \
+    update-alternatives --install /usr/bin/clang++ clang++ /usr/bin/clang++-${clang_version} 100; \
+    update-alternatives --install /usr/bin/llvm-ar llvm-ar /usr/bin/llvm-ar-${clang_version} 100; \
+    update-alternatives --install /usr/bin/llvm-ranlib llvm-ranlib /usr/bin/llvm-ranlib-${clang_version} 100; \
+    rm -rf /var/lib/apt/lists/*
+
+# pipx tooling and python utilities
+RUN set -eux; \
+    mkdir -p "${PIPX_HOME}"; \
+    pipx install --force meson; \
+    pipx install --force uv
+
+# nodejs from upstream tarball
+RUN set -eux; \
+    ARCH="$(dpkg --print-architecture)"; \
+    case "${ARCH}" in \
+        amd64) NODE_ARCH="x64";; \
+        arm64) NODE_ARCH="arm64";; \
+        *) echo "Unsupported architecture: ${ARCH}" >&2; exit 1;; \
+    esac; \
+    curl -fsSL "https://nodejs.org/dist/v${node_version}/node-v${node_version}-linux-${NODE_ARCH}.tar.xz" -o /tmp/node.tar.xz; \
+    mkdir -p /usr/local/lib/nodejs /tmp/node-dist; \
+    tar -xJf /tmp/node.tar.xz -C /tmp/node-dist; \
+    rm -rf "/usr/local/lib/nodejs/node-v${node_version}-linux-${NODE_ARCH}"; \
+    mv "/tmp/node-dist/node-v${node_version}-linux-${NODE_ARCH}" /usr/local/lib/nodejs/; \
+    rm -f /tmp/node.tar.xz; \
+    rm -rf /tmp/node-dist; \
+    ln -sf "/usr/local/lib/nodejs/node-v${node_version}-linux-${NODE_ARCH}/bin/node" /usr/local/bin/node; \
+    ln -sf "/usr/local/lib/nodejs/node-v${node_version}-linux-${NODE_ARCH}/bin/npm" /usr/local/bin/npm; \
+    ln -sf "/usr/local/lib/nodejs/node-v${node_version}-linux-${NODE_ARCH}/bin/npx" /usr/local/bin/npx; \
+    npm install -g npm@latest; \
+    node -v; \
+    npm -v
+
+# cmake and ninja releases
+RUN set -eux; \
+    ARCH="$(dpkg --print-architecture)"; \
+    case "${ARCH}" in \
+        amd64) CMAKE_ARCH="linux-x86_64"; NINJA_PACKAGE="ninja-linux.zip";; \
+        arm64) CMAKE_ARCH="linux-aarch64"; NINJA_PACKAGE="ninja-linux-aarch64.zip";; \
+        *) echo "Unsupported architecture: ${ARCH}" >&2; exit 1;; \
+    esac; \
+    curl -fsSL "https://github.com/Kitware/CMake/releases/download/v${cmake_version}/cmake-${cmake_version}-${CMAKE_ARCH}.tar.gz" -o /tmp/cmake.tar.gz; \
+    tar -C /opt -xzf /tmp/cmake.tar.gz; \
+    rm /tmp/cmake.tar.gz; \
+    for tool in cmake ccmake cpack ctest; do \
+        if [ -f "/opt/cmake-${cmake_version}-${CMAKE_ARCH}/bin/${tool}" ]; then \
+            ln -sf "/opt/cmake-${cmake_version}-${CMAKE_ARCH}/bin/${tool}" "/usr/local/bin/${tool}"; \
+        fi; \
+    done; \
+    curl -fsSL "https://github.com/ninja-build/ninja/releases/download/v${ninja_version}/${NINJA_PACKAGE}" -o /tmp/ninja.zip; \
+    unzip -oq /tmp/ninja.zip -d /usr/local/bin; \
+    chmod +x /usr/local/bin/ninja; \
+    rm -f /tmp/ninja.zip; \
+    ninja --version
+
+# developer utilities
+RUN set -eux; \
+    ARCH="$(dpkg --print-architecture)"; \
+    if [ "${ARCH}" != "amd64" ]; then \
+        echo "Developer utilities are only packaged for amd64." >&2; \
+        exit 1; \
+    fi; \
+    curl -fsSL "https://github.com/BurntSushi/ripgrep/releases/download/${ripgrep_release}/ripgrep_${ripgrep_package_version}_amd64.deb" -o /tmp/ripgrep.deb; \
+    apt-get update; \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends /tmp/ripgrep.deb; \
+    rm -f /tmp/ripgrep.deb; \
+    curl -fsSL "https://github.com/sharkdp/fd/releases/download/v${fd_version}/fd-v${fd_version}-x86_64-unknown-linux-gnu.tar.gz" -o /tmp/fd.tar.gz; \
+    tar -xzf /tmp/fd.tar.gz -C /tmp; \
+    install -m 0755 "/tmp/fd-v${fd_version}-x86_64-unknown-linux-gnu/fd" /usr/local/bin/fd; \
+    rm -rf /tmp/fd.tar.gz "/tmp/fd-v${fd_version}-x86_64-unknown-linux-gnu"; \
+    curl -fsSL "https://github.com/sharkdp/bat/releases/download/v${bat_version}/bat-v${bat_version}-x86_64-unknown-linux-gnu.tar.gz" -o /tmp/bat.tar.gz; \
+    tar -xzf /tmp/bat.tar.gz -C /tmp; \
+    install -m 0755 "/tmp/bat-v${bat_version}-x86_64-unknown-linux-gnu/bat" /usr/local/bin/bat; \
+    rm -rf /tmp/bat.tar.gz "/tmp/bat-v${bat_version}-x86_64-unknown-linux-gnu"; \
+    curl -fsSL "https://github.com/junegunn/fzf/releases/download/v${fzf_version}/fzf-${fzf_version}-linux_amd64.tar.gz" -o /tmp/fzf.tar.gz; \
+    tar -xzf /tmp/fzf.tar.gz -C /usr/local/bin; \
+    chmod +x /usr/local/bin/fzf; \
+    rm -f /tmp/fzf.tar.gz; \
+    curl -fsSL https://bun.sh/install | bash; \
+    ln -sf "${BUN_INSTALL}/bin/bun" /usr/local/bin/bun; \
+    chmod -R a+rx "${BUN_INSTALL}"; \
+    rm -rf /var/lib/apt/lists/*
+
+# shared shell helpers
+RUN set -eux; \
+    cat <<'EOF' > /etc/profile.d/dev_tool_paths.sh
+# path adjustments
+if [ -n "${HOME:-}" ]; then
+    PATH="$HOME/.local/bin:$PATH"
+fi
+PATH="/opt/bun/bin:$PATH"
+export PATH
+EOF
+
+# configure zsh environment
+RUN set -eux; \
+    touch /root/.bash_profile; \
+    if ! grep -Fq '. /etc/profile.d/dev_tool_paths.sh' /root/.bash_profile; then \
+        printf '\n. /etc/profile.d/dev_tool_paths.sh\n' >> /root/.bash_profile; \
+    fi; \
+    RUNZSH=no CHSH=no sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" --unattended; \
+    sed -i 's/plugins=(git)/plugins=(fzf)/' /root/.zshrc; \
+    sed -i 's/ZSH_THEME="robbyrussell"/ZSH_THEME="cypher"/' /root/.zshrc; \
+    git clone https://github.com/zsh-users/zsh-autosuggestions /root/.oh-my-zsh/custom/plugins/zsh-autosuggestions; \
+    git clone https://github.com/zsh-users/zsh-syntax-highlighting /root/.oh-my-zsh/custom/plugins/zsh-syntax-highlighting; \
+    printf '\nsource ~/.bash_profile\n' >> /root/.zshrc; \
+    usermod --shell /bin/zsh root; \
+    echo "sgxdev" > /etc/hostname
+
+# sgx sdk installer
+RUN set -eux; \
+    mkdir -p /tmp/sgx-sdk; \
+    cd /tmp/sgx-sdk; \
+    curl -fsSL "${sgx_repo_base}/sgx_linux_x64_sdk_${sgx_sdk_version}.bin" -o sgx_sdk.bin; \
+    chmod +x sgx_sdk.bin; \
+    yes | ./sgx_sdk.bin --prefix /opt/intel; \
+    rm -rf /tmp/sgx-sdk
+
+# clone linux sgx reference
+RUN git clone --depth 1 --branch "${linux_sgx_ref}" https://github.com/intel/linux-sgx.git /opt/src/linux-sgx
+
+# build sample in simulation mode
+RUN bash -lc 'set -ex; \
+    source "${SGX_SDK}/environment"; \
+    cd "${SGX_SDK}/SampleCode/SampleEnclave"; \
+    make SGX_MODE=SIM; \
+    make clean'
+
+# sgx env helpers
+RUN set -eux; \
+    printf '#!/bin/sh\nif [ -f "%s/environment" ]; then\n    . "%s/environment"\nfi\n' "${SGX_SDK}" "${SGX_SDK}" > /etc/profile.d/sgxsdk.sh; \
+    chmod +x /etc/profile.d/sgxsdk.sh; \
+    ln -sf "${SGX_SDK}/bin/sgx_edger8r" /usr/local/bin/sgx_edger8r; \
+    ln -sf "${SGX_SDK}/bin/x64/sgx_edger8r" /usr/local/bin/sgx_edger8r_x64 || true; \
+    ln -sf "${SGX_SDK}/bin/sgx_sign" /usr/local/bin/sgx_sign; \
+    ln -sf "${SGX_SDK}/bin/sgx-gdb" /usr/local/bin/sgx-gdb
+
+# default shell environment
+RUN echo "source ${SGX_SDK}/environment" >> /root/.bashrc
+
+# skel shortcuts for tools
+RUN mkdir -p /etc/skel/.local/bin; \
+    ln -sf /usr/local/bin/bun /etc/skel/.local/bin/bun; \
+    ln -sf /usr/local/bin/uv /etc/skel/.local/bin/uv; \
+    if ! grep -Fq '. /etc/profile.d/dev_tool_paths.sh' /etc/skel/.bash_profile 2>/dev/null; then \
+        printf '\n. /etc/profile.d/dev_tool_paths.sh\n' >> /etc/skel/.bash_profile; \
+    fi
+
+# create non root user
+RUN set -eux; \
+    if id ubuntu >/dev/null 2>&1; then userdel -r ubuntu || true; fi; \
+    if getent group ubuntu >/dev/null; then groupdel ubuntu || true; fi; \
+    if ! getent group "${GNAME}" >/dev/null; then \
+        groupadd -o --gid "${GID}" "${GNAME}"; \
+    fi; \
+    if ! id "${UNAME}" >/dev/null 2>&1; then \
+        useradd -m -s /bin/bash -u "${UID}" -g "${GID}" "${UNAME}" || useradd -o -m -s /bin/bash -u "${UID}" -g "${GID}" "${UNAME}"; \
+    fi; \
+    echo "${UNAME} ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers; \
+    mkdir -p /home/${UNAME}; \
+    touch /home/${UNAME}/.bashrc; \
+    touch /home/${UNAME}/.bash_profile; \
+    if ! grep -Fq '. /etc/profile.d/dev_tool_paths.sh' "/home/${UNAME}/.bash_profile"; then \
+        printf '\n. /etc/profile.d/dev_tool_paths.sh\n' >> "/home/${UNAME}/.bash_profile"; \
+    fi; \
+    echo "source ${SGX_SDK}/environment" >> /home/${UNAME}/.bashrc; \
+    cp -r /root/.oh-my-zsh /home/${UNAME}/.oh-my-zsh; \
+    cp /root/.zshrc /home/${UNAME}/.zshrc; \
+    sed -i "s#/root/.oh-my-zsh#/home/${UNAME}/.oh-my-zsh#" /home/${UNAME}/.zshrc; \
+    usermod --shell /bin/zsh ${UNAME}; \
+    chown -R "${UID}:${GID}" /home/${UNAME}; \
+    chown -R "${UID}:${GID}" "${SGX_SDK}/SampleCode"
+
+EXPOSE 2222
+
+WORKDIR /prj
+CMD ["/usr/sbin/sshd", "-D", "-p", "2222"]

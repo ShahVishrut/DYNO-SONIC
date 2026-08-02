@@ -1,0 +1,18 @@
+---
+TabWidth: '2'
+UseTab: Never
+InsertBraces: true
+ColumnLimit: '120'
+PointerAlignment: Left
+SpaceAfterCStyleCast: true
+AlignAfterOpenBracket: BlockIndent
+PenaltyBreakComment: 300
+PenaltyBreakString: 1000
+PenaltyBreakFirstLessLess: 120
+PenaltyExcessCharacter: 1000000
+PenaltyReturnTypeOnItsOwnLine: 200
+BreakConstructorInitializers: AfterColon
+ConstructorInitializerAllOnOneLineOrOnePerLine: true
+IncludeBlocks: Preserve
+SortIncludes: Never
+...

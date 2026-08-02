@@ -1,0 +1,19 @@
+enclave {
+    from "sgx_tstdc.edl" import *;
+    from "sgx_pthread.edl" import *;
+    from "sonic_sgxbridge_core.edl" import *;
+
+    struct sonic_demo_run_args {
+        uint32_t verbosity;
+        uint32_t flags;
+    };
+
+    trusted {
+        public sgx_status_t sonic_demo_run(
+            [user_check] const void* intent_buffer,
+            [user_check] void* result_buffer,
+            [in] const struct sonic_demo_run_args* args,
+            [user_check] void* host_state
+        );
+    };
+};

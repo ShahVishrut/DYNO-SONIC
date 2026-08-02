@@ -1,0 +1,177 @@
+# native development container
+ARG fedora_version=43
+
+FROM fedora:${fedora_version}
+
+ARG UNAME=user
+ARG GNAME=user
+ARG UID=1000
+ARG GID=1000
+
+ARG node_version=22.20.0
+
+ENV LANG=en_US.UTF-8 \
+    LC_ALL=en_US.UTF-8 \
+    PIPX_HOME=/opt/pipx \
+    PIPX_BIN_DIR=/usr/local/bin \
+    BUN_INSTALL=/opt/bun \
+    UV_INSTALL_DIR=/opt/uv \
+    SHELL=/bin/zsh \
+    OMPI_ALLOW_RUN_AS_ROOT=1 \
+    OMPI_ALLOW_RUN_AS_ROOT_CONFIRM=1
+
+# base toolchain and utilities
+RUN set -eux; \
+    dnf -y update; \
+    dnf -y install --setopt=install_weak_deps=False \
+        capnproto \
+        capnproto-devel \
+        ccache \
+        clang \
+        clang-tools-extra \
+        lld \
+        llvm \
+        gcc \
+        gcc-c++ \
+        gdb \
+        git \
+        make \
+        mold \
+        compiler-rt \
+        cmake \
+        ninja-build \
+        pkgconf-pkg-config \
+        python3 \
+        python3-devel \
+        python3-pip \
+        python3-setuptools \
+        python3-virtualenv \
+        python3-wheel \
+        pipx \
+        openssl-devel \
+        libffi-devel \
+        libcurl-devel \
+        zlib-devel \
+        libstdc++-devel \
+        openmpi-devel \
+        glibc-langpack-en \
+        ca-certificates \
+        curl \
+        wget \
+        unzip \
+        xz \
+        tar \
+        which \
+        diffutils \
+        sudo \
+        zsh \
+        ripgrep \
+        sudo \
+        fd-find \
+        bat \
+        fzf; \
+    ln -sf /usr/bin/fdfind /usr/local/bin/fd || true; \
+    dnf clean all; \
+    rm -rf /var/cache/dnf
+
+# nodejs toolchain
+RUN set -eux; \
+    ARCH="$(uname -m)"; \
+    case "${ARCH}" in \
+        x86_64) NODE_ARCH="x64";; \
+        aarch64) NODE_ARCH="arm64";; \
+        *) echo "Unsupported architecture: ${ARCH}" >&2; exit 1;; \
+    esac; \
+    curl -fsSL "https://nodejs.org/dist/v${node_version}/node-v${node_version}-linux-${NODE_ARCH}.tar.xz" -o /tmp/node.tar.xz; \
+    mkdir -p /usr/local/lib/nodejs /tmp/node-dist; \
+    tar -xJf /tmp/node.tar.xz -C /tmp/node-dist; \
+    rm -rf "/usr/local/lib/nodejs/node-v${node_version}-linux-${NODE_ARCH}"; \
+    mv "/tmp/node-dist/node-v${node_version}-linux-${NODE_ARCH}" /usr/local/lib/nodejs/; \
+    rm -f /tmp/node.tar.xz; \
+    rm -rf /tmp/node-dist; \
+    ln -sf "/usr/local/lib/nodejs/node-v${node_version}-linux-${NODE_ARCH}/bin/node" /usr/local/bin/node; \
+    ln -sf "/usr/local/lib/nodejs/node-v${node_version}-linux-${NODE_ARCH}/bin/npm" /usr/local/bin/npm; \
+    ln -sf "/usr/local/lib/nodejs/node-v${node_version}-linux-${NODE_ARCH}/bin/npx" /usr/local/bin/npx; \
+    npm install -g npm@latest; \
+    node -v; \
+    npm -v
+
+# pipx-managed tooling
+RUN set -eux; \
+    python3 -m pip install --upgrade pip; \
+    mkdir -p "${PIPX_HOME}"; \
+    pipx install --force meson; \
+    pipx install --force poetry
+
+# uv runtime manager
+RUN set -eux; \
+    curl -LsSf https://astral.sh/uv/install.sh | sh; \
+    ln -sf "${UV_INSTALL_DIR}/bin/uv" /usr/local/bin/uv
+
+# bun runtime
+RUN set -eux; \
+    curl -fsSL https://bun.sh/install | bash; \
+    ln -sf "${BUN_INSTALL}/bin/bun" /usr/local/bin/bun; \
+    chmod -R a+rx "${BUN_INSTALL}"
+
+# shared shell helpers
+RUN set -eux; \
+    cat <<'EOF' > /etc/profile.d/dev_tool_paths.sh
+# path adjustments for development tooling
+if [ -n "${HOME:-}" ]; then
+    PATH="$HOME/.local/bin:$PATH"
+fi
+PATH="/opt/bun/bin:/opt/uv/bin:$PATH"
+export PATH
+EOF
+
+# configure zsh environment
+RUN set -eux; \
+    touch /root/.bash_profile; \
+    if ! grep -Fq '. /etc/profile.d/dev_tool_paths.sh' /root/.bash_profile; then \
+        printf '\n. /etc/profile.d/dev_tool_paths.sh\n' >> /root/.bash_profile; \
+    fi; \
+    RUNZSH=no CHSH=no sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" --unattended; \
+    sed -i 's/plugins=(git)/plugins=(fzf)/' /root/.zshrc; \
+    sed -i 's/ZSH_THEME="robbyrussell"/ZSH_THEME="cypher"/' /root/.zshrc; \
+    git clone https://github.com/zsh-users/zsh-autosuggestions /root/.oh-my-zsh/custom/plugins/zsh-autosuggestions; \
+    git clone https://github.com/zsh-users/zsh-syntax-highlighting /root/.oh-my-zsh/custom/plugins/zsh-syntax-highlighting; \
+    if ! grep -Fq '/etc/profile.d/dev_tool_paths.sh' /root/.zshrc; then \
+        printf '\nif [ -f /etc/profile.d/dev_tool_paths.sh ]; then\n  . /etc/profile.d/dev_tool_paths.sh\nfi\n' >> /root/.zshrc; \
+    fi; \
+    usermod --shell /bin/zsh root; \
+    echo "sonic2-native" > /etc/hostname
+
+# skel helpers for new users
+RUN mkdir -p /etc/skel/.local/bin; \
+    ln -sf /usr/local/bin/bun /etc/skel/.local/bin/bun; \
+    ln -sf /usr/local/bin/poetry /etc/skel/.local/bin/poetry; \
+    ln -sf /usr/local/bin/uv /etc/skel/.local/bin/uv; \
+    if ! grep -Fq '. /etc/profile.d/dev_tool_paths.sh' /etc/skel/.bash_profile 2>/dev/null; then \
+        printf '\n. /etc/profile.d/dev_tool_paths.sh\n' >> /etc/skel/.bash_profile; \
+    fi
+
+# create non-root user
+RUN set -eux; \
+    if id fedora >/dev/null 2>&1; then userdel -r fedora || true; fi; \
+    if getent group fedora >/dev/null; then groupdel fedora || true; fi; \
+    if ! getent group "${GNAME}" >/dev/null; then \
+        groupadd -o --gid "${GID}" "${GNAME}"; \
+    fi; \
+    if ! id "${UNAME}" >/dev/null 2>&1; then \
+        useradd -m -s /bin/zsh -u "${UID}" -g "${GID}" "${UNAME}" || useradd -o -m -s /bin/zsh -u "${UID}" -g "${GID}" "${UNAME}"; \
+    fi; \
+    echo "${UNAME} ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers; \
+    mkdir -p /home/${UNAME}; \
+    touch /home/${UNAME}/.bashrc; \
+    touch /home/${UNAME}/.bash_profile; \
+    if ! grep -Fq '. /etc/profile.d/dev_tool_paths.sh' "/home/${UNAME}/.bash_profile"; then \
+        printf '\n. /etc/profile.d/dev_tool_paths.sh\n' >> "/home/${UNAME}/.bash_profile"; \
+    fi; \
+    cp -r /root/.oh-my-zsh /home/${UNAME}/.oh-my-zsh; \
+    cp /root/.zshrc /home/${UNAME}/.zshrc; \
+    sed -i "s#/root/.oh-my-zsh#/home/${UNAME}/.oh-my-zsh#" /home/${UNAME}/.zshrc; \
+    chown -R "${UID}:${GID}" /home/${UNAME}
+
+WORKDIR /prj
+CMD ["/bin/zsh"]
