@@ -1,0 +1,14 @@
+source: data is table('duckdb:data/all.csv'){}
+
+query: data -> {
+    where: disk = 0
+    where: test ? 'somap' | 'domap'
+    where: bs = 11
+    group_by: test
+    nest: q_line_chart is {
+        group_by: n
+        aggregate: insert_bytes
+        // group_by: test
+        // select: insert_bytes
+    }
+}

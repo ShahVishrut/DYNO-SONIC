@@ -1,0 +1,9 @@
+cc_library(
+    name = "utils",
+    hdrs = glob(["**/*.h"]),
+    deps = [
+        "@openssl.dev//:openssl",
+    ],
+    visibility = ["//visibility:public"],
+    copts = ["-std=c++20"],
+)

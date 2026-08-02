@@ -1,0 +1,43 @@
+COPTS = ["-std=c++20"]
+
+cc_library(
+    name = "oram",
+    srcs = ["oram.cc"],
+    hdrs = ["oram.h"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//src/store:store",
+        "//src/utils:utils",
+        "@openssl.dev//:openssl",
+    ],
+    copts = COPTS,
+)
+
+cc_library(
+    name = "omap",
+    srcs = ["omap.cc"],
+    hdrs = ["omap.h"],
+    deps = [
+        "//src/static:oram",
+        "//src/store:store",
+        "//src/utils:utils",
+        "@sonic//:sonic",
+        "//src/dynamic:oram",
+    ],
+    visibility = ["//visibility:public"],
+    copts = COPTS,
+)
+
+cc_library(
+    name = "oheap",
+    srcs = ["oheap.cc"],
+    hdrs = ["oheap.h"],
+    deps = [
+        "//src/store:store",
+        "//src/utils:utils",
+        "@sonic//:sonic",
+        "//src/dynamic:oram",
+    ],
+    visibility = ["//visibility:public"],
+    copts = COPTS,
+)

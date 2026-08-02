@@ -1,0 +1,36 @@
+COPTS = ["-std=c++20", "-faligned-allocation", "-masm=intel"]
+
+cc_library(
+    name = "oram",
+    srcs = ["oram.cc", "sonic_adapter.cc"],
+    hdrs = ["oram.h", "sonic_adapter.h"],
+    deps = [
+        "//src/static:oram",
+        "@sonic//:sonic",
+        "@openssl.dev//:openssl",
+    ],
+    visibility = ["//visibility:public"],
+    copts = COPTS,
+)
+
+cc_library(
+    name = "omap",
+    srcs = ["omap.cc"],
+    hdrs = ["omap.h"],
+    deps = [
+        "//src/static:omap",
+    ],
+    visibility = ["//visibility:public"],
+    copts = COPTS,
+)
+
+cc_library(
+    name = "oheap",
+    srcs = ["oheap.cc"],
+    hdrs = ["oheap.h"],
+    deps = [
+        "//src/static:oheap",
+    ],
+    visibility = ["//visibility:public"],
+    copts = COPTS,
+)

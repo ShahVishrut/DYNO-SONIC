@@ -1,0 +1,91 @@
+COPTS = ["-std=c++20"]
+
+cc_binary(
+    name = "csv_headers",
+    srcs = ["print_headers.cc"],
+    deps = [
+        "//src/utils",
+    ],
+    copts = COPTS,
+)
+
+cc_binary(
+    name = "resizable_tree_oram_sim",
+    srcs = ["bench/resizable_tree_oram_sim.cc"],
+    deps = [
+        "//src/store",
+        "//src/utils",
+        "@openssl.dev//:openssl",
+    ],
+    copts = COPTS,
+)
+
+cc_binary(
+    name = "time_static_oram",
+    srcs = ["bench/static_oram/time_all.cc"],
+    deps = [
+        "//src/static:oram",
+        "@openssl.dev//:openssl",
+    ],
+    copts = COPTS,
+)
+
+cc_binary(
+    name = "time_static_omap",
+    srcs = ["bench/static_omap/time_all.cc"],
+    deps = [
+        "//src/static:omap",
+        "@openssl.dev//:openssl",
+    ],
+    copts = COPTS,
+)
+
+cc_binary(
+    name = "time_static_oheap",
+    srcs = ["bench/static_oheap/time_all.cc"],
+    deps = [
+        "//src/static:oheap",
+        "@openssl.dev//:openssl",
+    ],
+    copts = COPTS,
+)
+
+cc_binary(
+    name = "time_dynamic_oram",
+    srcs = ["bench/dynamic_oram/all_but_alloc.cc"],
+    deps = [
+        "//src/dynamic:oram",
+        "@openssl.dev//:openssl",
+    ],
+    copts = COPTS,
+)
+
+cc_binary(
+    name = "time_dynamic_omap",
+    srcs = ["bench/dynamic_omap/all_but_alloc.cc"],
+    deps = [
+        "//src/dynamic:omap",
+        "@openssl.dev//:openssl",
+    ],
+    copts = COPTS,
+)
+
+cc_binary(
+    name = "time_dynamic_oheap",
+    srcs = ["bench/dynamic_oheap/all_but_alloc.cc"],
+    deps = [
+        "//src/dynamic:oheap",
+        "@openssl.dev//:openssl",
+    ],
+    copts = COPTS,
+)
+cc_binary(
+    name = "test_correctness",
+    srcs = ["test_correctness.cc"],
+    deps = [
+        "//src/dynamic:omap",
+        "//src/dynamic:oheap",
+        "@openssl.dev//:openssl",
+    ],
+    copts = COPTS,
+)

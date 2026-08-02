@@ -1,0 +1,77 @@
+workspace(name = "dyno")
+
+load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
+
+http_archive(
+    name = "rules_cc",
+    urls = ["https://github.com/bazelbuild/rules_cc/releases/download/0.0.9/rules_cc-0.0.9.tar.gz"],
+    sha256 = "2037875b9a4456dce4a79d112a8ae885bbc4aad968e6587dca6e64f3a0900cdf",
+    strip_prefix = "rules_cc-0.0.9",
+)
+
+http_archive(
+    name = "io_tweag_rules_nixpkgs",
+    sha256 = "980edfceef2e59e1122d9be6c52413bc298435f0a3d452532b8a48d7562ffd67",
+    strip_prefix = "rules_nixpkgs-0.10.0",
+    urls = ["https://github.com/tweag/rules_nixpkgs/releases/download/v0.10.0/rules_nixpkgs-0.10.0.tar.gz"],
+)
+
+load("@io_tweag_rules_nixpkgs//nixpkgs:repositories.bzl", "rules_nixpkgs_dependencies")
+rules_nixpkgs_dependencies()
+
+load("@io_tweag_rules_nixpkgs//nixpkgs:nixpkgs.bzl", "nixpkgs_local_repository", "nixpkgs_cc_configure", "nixpkgs_package")
+nixpkgs_local_repository(
+    name = "nixpkgs",
+    nix_file = "//:nixpkgs.nix",
+    nix_file_deps = ["//:flake.lock"],
+)
+
+nixpkgs_cc_configure(
+    repository = "@nixpkgs",
+)
+
+# <openssl>
+OPENSSL_PKG = "openssl_3_1"
+
+nixpkgs_package(
+    name = "openssl",
+    repository = "@nixpkgs",
+    attribute_path = OPENSSL_PKG + ".out",
+    build_file_content = """\
+filegroup(
+    name = "libcrypto",
+    srcs = glob(["lib/libcrypto.dylib", "lib/libcrypto.so*", "lib/libcrypto.a"]),
+    visibility = ["//visibility:public"],
+)
+filegroup(
+    name = "libssl",
+    srcs = glob(["lib/libssl.dylib", "lib/libssl.so*", "lib/libssl.a"]),
+    visibility = ["//visibility:public"],
+)
+    """,
+)
+
+nixpkgs_package(
+    name = "openssl.dev",
+    repository = "@nixpkgs",
+    attribute_path = OPENSSL_PKG + ".dev",
+    build_file_content = """\
+cc_library(
+    name = "openssl",
+    srcs = ["@openssl//:libcrypto", "@openssl//:libssl"],
+    hdrs = glob(["include/openssl/*.h"]),
+    strip_include_prefix = "include",
+    visibility = ["//visibility:public"],
+)
+    """,
+)
+# </openssl>
+
+load("@rules_cc//cc:repositories.bzl", "rules_cc_dependencies", "rules_cc_toolchains")
+rules_cc_dependencies()
+rules_cc_toolchains()
+
+local_repository(
+    name = "sonic",
+    path = "../sonic",
+)
