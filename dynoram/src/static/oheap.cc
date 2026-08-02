@@ -266,6 +266,11 @@ void OHeap::UpdateMinAndEvict(Pos pos, crypto::Key enc_key) {
   Block children_min_block(true);
   for (unsigned int idx : path) {
     Bucket bu;
+    bu.meta_.flags_ = 0;
+    for (int j = 0; j < kBucketSize; ++j) {
+        bu.blocks_[j] = dyno::static_path_oheap::Block(true);
+    }
+    bu.min_block_ = dyno::static_path_oheap::Block(true);
     int bucket_index = 0;
     for (int i = 0; i < stash_.size(); i++) {
       bool not_deleted = !deleted_from_stash[i];
