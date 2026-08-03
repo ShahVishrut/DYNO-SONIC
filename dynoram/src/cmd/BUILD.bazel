@@ -85,6 +85,7 @@ cc_binary(
     deps = [
         "//src/dynamic:omap",
         "//src/dynamic:oheap",
+        "//src/dynamic:oram",
         "@openssl.dev//:openssl",
     ],
     copts = COPTS,
