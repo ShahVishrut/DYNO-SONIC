@@ -23,7 +23,7 @@ inline std::uint64_t zingoram_tree_height(std::uint64_t block_count, std::uint32
 
   const double raw_height = std::ceil(std::log2(two_n_over_a));
   std::uint64_t height = raw_height > 0.0 ? static_cast<std::uint64_t>(raw_height) : 0ULL;
-  height = std::max<std::uint64_t>(0, height - 1);
+  height = height > 0 ? height - 1 : 0;
 
   return height;
 }

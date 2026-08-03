@@ -99,27 +99,32 @@ void TestORam() {
     auto oram = std::make_unique<dyno::dynamic_stepping_path_oram::ORam>(0, 8); 
     
     // Insert keys incrementally up to 1024
-    for (int i = 1; i <= 1024; ++i) {
-        if (oram->Size() == oram->Capacity()) {
-            std::cout << "Growing ORam at size " << oram->Size() << "...\n";
-            oram->Grow(enc_key);
-        }
-        
-        auto v = std::make_unique<uint8_t[]>(8);
-        std::memset(v.get(), i % 255, 8);
-        oram->Insert(i, std::move(v), enc_key);
-
-        // Every once in a while, do a read to ensure it works
-        if (i % 64 == 0) {
-            int read_key = i / 2;
-            std::cout << "  Verifying ORam Read for key " << read_key << "\n";
-            auto res = oram->Read(read_key, enc_key);
-            assert(res.val_ != nullptr && "Value should not be null!");
-            if (res.val_.get()[0] != read_key % 255) {
-                std::cerr << "ORam Read mismatch! Expected " << (read_key % 255) << ", got " << (int)res.val_.get()[0] << "\n";
+    try {
+        for (int i = 1; i <= 1024; ++i) {
+            if (oram->Size() == oram->Capacity()) {
+                std::cout << "Growing ORam at size " << oram->Size() << "...\n";
+                oram->Grow(enc_key);
             }
-            assert(res.val_.get()[0] == read_key % 255 && "Value should match what was inserted!");
+            
+            auto v = std::make_unique<uint8_t[]>(8);
+            std::memset(v.get(), i % 255, 8);
+            oram->Insert(i, std::move(v), enc_key);
+
+            // Every once in a while, do a read to ensure it works
+            if (i % 64 == 0) {
+                int read_key = i / 2;
+                std::cout << "  Verifying ORam Read for key " << read_key << "\n";
+                auto res = oram->Read(read_key, enc_key);
+                assert(res.val_ != nullptr && "Value should not be null!");
+                if (res.val_.get()[0] != read_key % 255) {
+                    std::cerr << "ORam Read mismatch! Expected " << (read_key % 255) << ", got " << (int)res.val_.get()[0] << "\n";
+                }
+                assert(res.val_.get()[0] == read_key % 255 && "Value should match what was inserted!");
+            }
         }
+    } catch (const std::exception& e) {
+        std::cerr << "ORam Test Failed! Exception: " << e.what() << " at Size=" << oram->Size() << ", Capacity=" << oram->Capacity() << "\n";
+        throw;
     }
     
     std::cout << "ORam correctness test passed!\n";
