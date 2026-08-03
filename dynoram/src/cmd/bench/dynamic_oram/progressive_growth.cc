@@ -14,6 +14,19 @@ bool is_po2(size_t x) {
     return x && !(x & (x - 1));
 }
 
+// Tree allocation happens when `capacity_` (which is i + 1) is a power of 2.
+// The user wants to see the allocation iteration, and the 2 before & 2 after it.
+// This is equivalent to checking if any value in [i-1, i+3] is a power of 2 >= 4.
+bool is_near_po2_alloc(size_t i) {
+    for (int offset = -1; offset <= 3; ++offset) {
+        size_t test_val = i + offset;
+        if (test_val >= 4 && is_po2(test_val)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 int main(int argc, char **argv) {
     int max_po2 = 20; // 2^20 defaults
     if (argc > 1) {
@@ -22,7 +35,7 @@ int main(int argc, char **argv) {
     
     size_t target_inserts = 1ULL << max_po2;
     std::cout << "Starting progressive growth benchmark up to " << target_inserts << " inserts (2^" << max_po2 << ").\n";
-    std::cout << "CSV FORMAT: Iteration,TreeCapacity,AvgInsertTimeMs,LastGrowTimeMs,LastSearchTimeMs\n";
+    std::cout << "CSV FORMAT: Iteration,TreeCapacity,AvgInsertTimeMs,ThisInsertTimeMs,ThisGrowTimeMs,ThisSearchTimeMs\n";
     
     auto enc_key = GenerateKey();
     
@@ -54,8 +67,8 @@ int main(int argc, char **argv) {
         
         total_insert_ms += insert_ms;
         
-        // Print stats at powers of two or every 10,000 inserts
-        if (is_po2(i) || i % 10000 == 0 || i == target_inserts) {
+        // Print stats at powers of two, every 10k, or near an allocation
+        if (is_po2(i) || i % 10000 == 0 || i == target_inserts || is_near_po2_alloc(i)) {
             
             // Perform a sample Search to measure time
             start = std::chrono::high_resolution_clock::now();
@@ -69,6 +82,7 @@ int main(int argc, char **argv) {
             std::cout << i << "," 
                       << oram->Capacity() << "," 
                       << avg_insert << "," 
+                      << insert_ms << ","
                       << grow_ms << ","
                       << search_ms << std::endl;
         }
