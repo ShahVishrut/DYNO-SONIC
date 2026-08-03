@@ -22,7 +22,7 @@ struct backend_cpp final {
     static_assert(std::is_integral<T>::value, "ct_set: T must be an integral type");
     if constexpr (std::is_same_v<T, bool>) {
       bool v_out = *out;
-      *out = cond ? src : v_out;
+      *out = (cond & src) | ((!cond) & v_out);
     } else {
       using UT = std::make_unsigned_t<T>;
       auto* uout = reinterpret_cast<UT*>(out);
@@ -37,8 +37,8 @@ struct backend_cpp final {
     if constexpr (std::is_same_v<T, bool>) {
       bool v_a = *a;
       bool v_b = *b;
-      *a = cond ? v_b : v_a;
-      *b = cond ? v_a : v_b;
+      *a = (cond & v_b) | ((!cond) & v_a);
+      *b = (cond & v_a) | ((!cond) & v_b);
     } else {
       using UT = std::make_unsigned_t<T>;
       auto* ua = reinterpret_cast<UT*>(a);
@@ -89,7 +89,7 @@ struct backend_cpp final {
   template <typename T> static inline T ct_select(const T a, const T b, bool cond) {
     static_assert(std::is_integral<T>::value, "ct_select: T must be an integral type");
     if constexpr (std::is_same_v<T, bool>) {
-      return cond ? a : b;
+      return (cond & a) | ((!cond) & b);
     } else {
       using UT = std::make_unsigned_t<T>;
       const UT ua = static_cast<UT>(a);
@@ -169,7 +169,7 @@ struct backend_cpp final {
     static_assert(std::is_integral_v<T>, "ct_set_array: T must be an integral type");
     if constexpr (std::is_same_v<T, bool>) {
       for (size_t i = 0; i < count; ++i) {
-        dst[i] = cond ? src[i] : dst[i];
+        dst[i] = (cond & src[i]) | ((!cond) & dst[i]);
       }
     } else {
       using UT = std::make_unsigned_t<T>;
@@ -188,7 +188,7 @@ struct backend_cpp final {
     static_assert(std::is_integral_v<T>, "ct_select_array: T must be an integral type");
     if constexpr (std::is_same_v<T, bool>) {
       for (size_t i = 0; i < count; ++i) {
-        out[i] = cond ? a[i] : b[i];
+        out[i] = (cond & a[i]) | ((!cond) & b[i]);
       }
     } else {
       using UT = std::make_unsigned_t<T>;
@@ -208,8 +208,8 @@ struct backend_cpp final {
       for (size_t i = 0; i < count; ++i) {
         bool v_a = a[i];
         bool v_b = b[i];
-        a[i] = cond ? v_b : v_a;
-        b[i] = cond ? v_a : v_b;
+        a[i] = (cond & v_b) | ((!cond) & v_a);
+        b[i] = (cond & v_a) | ((!cond) & v_b);
       }
     } else {
       using UT = std::make_unsigned_t<T>;
