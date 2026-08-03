@@ -65,7 +65,7 @@ struct SonicORamAdapter::Impl {
 
   uint64_t GenerateLeaf() {
     // Generate a uniformly distributed leaf ID based on the tree height.
-    uint64_t lc = 1ULL << (client->shape().height - 1);
+    uint64_t lc = 1ULL << client->shape().height;
     std::uniform_int_distribution<uint64_t> dist(0, lc - 1);
     return dist(rng);
   }
