@@ -20,22 +20,34 @@ struct backend_cpp final {
 
   template <typename T> static inline void ct_set(T* out, T src, bool cond) {
     static_assert(std::is_integral<T>::value, "ct_set: T must be an integral type");
-    using UT = std::make_unsigned_t<T>;
-    auto* uout = reinterpret_cast<UT*>(out);
-    const UT usrc = static_cast<UT>(src);
-    const UT mask = cond ? ~UT(0) : UT(0);
-    *uout ^= (usrc ^ *uout) & mask;
+    if constexpr (std::is_same_v<T, bool>) {
+      bool v_out = *out;
+      *out = cond ? src : v_out;
+    } else {
+      using UT = std::make_unsigned_t<T>;
+      auto* uout = reinterpret_cast<UT*>(out);
+      const UT usrc = static_cast<UT>(src);
+      const UT mask = cond ? ~UT(0) : UT(0);
+      *uout ^= (usrc ^ *uout) & mask;
+    }
   }
 
   template <typename T> static inline void ct_swap(T* a, T* b, bool cond) {
     static_assert(std::is_integral<T>::value, "ct_swap: T must be an integral type");
-    using UT = std::make_unsigned_t<T>;
-    auto* ua = reinterpret_cast<UT*>(a);
-    auto* ub = reinterpret_cast<UT*>(b);
-    const UT mask = cond ? ~UT(0) : UT(0);
-    *ua ^= *ub;
-    *ub ^= (*ua & mask);
-    *ua ^= *ub;
+    if constexpr (std::is_same_v<T, bool>) {
+      bool v_a = *a;
+      bool v_b = *b;
+      *a = cond ? v_b : v_a;
+      *b = cond ? v_a : v_b;
+    } else {
+      using UT = std::make_unsigned_t<T>;
+      auto* ua = reinterpret_cast<UT*>(a);
+      auto* ub = reinterpret_cast<UT*>(b);
+      const UT mask = cond ? ~UT(0) : UT(0);
+      *ua ^= *ub;
+      *ub ^= (*ua & mask);
+      *ua ^= *ub;
+    }
   }
 
   template <typename T> static inline bool ct_eq(const T a, const T b) {
@@ -76,11 +88,15 @@ struct backend_cpp final {
 
   template <typename T> static inline T ct_select(const T a, const T b, bool cond) {
     static_assert(std::is_integral<T>::value, "ct_select: T must be an integral type");
-    using UT = std::make_unsigned_t<T>;
-    const UT ua = static_cast<UT>(a);
-    const UT ub = static_cast<UT>(b);
-    const UT mask = cond ? ~UT(0) : UT(0);
-    return static_cast<T>((ua & mask) | (ub & ~mask));
+    if constexpr (std::is_same_v<T, bool>) {
+      return cond ? a : b;
+    } else {
+      using UT = std::make_unsigned_t<T>;
+      const UT ua = static_cast<UT>(a);
+      const UT ub = static_cast<UT>(b);
+      const UT mask = cond ? ~UT(0) : UT(0);
+      return static_cast<T>((ua & mask) | (ub & ~mask));
+    }
   }
 
   template <typename T> static inline T ct_div_pow2(const T a, const uint8_t log2_divisor) {
@@ -151,39 +167,60 @@ struct backend_cpp final {
 
   template <typename T> static inline void ct_set_array(T* dst, const T* src, size_t count, bool cond) {
     static_assert(std::is_integral_v<T>, "ct_set_array: T must be an integral type");
-    using UT = std::make_unsigned_t<T>;
-    const UT mask = cond ? ~UT(0) : UT(0);
-    auto* d = reinterpret_cast<UT*>(dst);
-    auto const* s = reinterpret_cast<const UT*>(src);
-    for (size_t i = 0; i < count; ++i) {
-      const UT sv = s[i];
-      UT dv = d[i];
-      d[i] = dv ^ ((sv ^ dv) & mask);
+    if constexpr (std::is_same_v<T, bool>) {
+      for (size_t i = 0; i < count; ++i) {
+        dst[i] = cond ? src[i] : dst[i];
+      }
+    } else {
+      using UT = std::make_unsigned_t<T>;
+      const UT mask = cond ? ~UT(0) : UT(0);
+      auto* d = reinterpret_cast<UT*>(dst);
+      auto const* s = reinterpret_cast<const UT*>(src);
+      for (size_t i = 0; i < count; ++i) {
+        const UT sv = s[i];
+        UT dv = d[i];
+        d[i] = dv ^ ((sv ^ dv) & mask);
+      }
     }
   }
 
   template <typename T> static inline void ct_select_array(T* out, const T* a, const T* b, size_t count, bool cond) {
     static_assert(std::is_integral_v<T>, "ct_select_array: T must be an integral type");
-    using UT = std::make_unsigned_t<T>;
-    const UT mask = cond ? ~UT(0) : UT(0);
-    auto* dst = reinterpret_cast<UT*>(out);
-    auto const* lhs = reinterpret_cast<const UT*>(a);
-    auto const* rhs = reinterpret_cast<const UT*>(b);
-    for (size_t i = 0; i < count; ++i) {
-      dst[i] = (lhs[i] & mask) | (rhs[i] & ~mask);
+    if constexpr (std::is_same_v<T, bool>) {
+      for (size_t i = 0; i < count; ++i) {
+        out[i] = cond ? a[i] : b[i];
+      }
+    } else {
+      using UT = std::make_unsigned_t<T>;
+      const UT mask = cond ? ~UT(0) : UT(0);
+      auto* dst = reinterpret_cast<UT*>(out);
+      auto const* lhs = reinterpret_cast<const UT*>(a);
+      auto const* rhs = reinterpret_cast<const UT*>(b);
+      for (size_t i = 0; i < count; ++i) {
+        dst[i] = (lhs[i] & mask) | (rhs[i] & ~mask);
+      }
     }
   }
 
   template <typename T> static inline void ct_swap_array(T* a, T* b, size_t count, bool cond) {
     static_assert(std::is_integral_v<T>, "ct_swap_array: T must be an integral type");
-    using UT = std::make_unsigned_t<T>;
-    const UT mask = cond ? ~UT(0) : UT(0);
-    auto* lhs = reinterpret_cast<UT*>(a);
-    auto* rhs = reinterpret_cast<UT*>(b);
-    for (size_t i = 0; i < count; ++i) {
-      const UT diff = (lhs[i] ^ rhs[i]) & mask;
-      lhs[i] ^= diff;
-      rhs[i] ^= diff;
+    if constexpr (std::is_same_v<T, bool>) {
+      for (size_t i = 0; i < count; ++i) {
+        bool v_a = a[i];
+        bool v_b = b[i];
+        a[i] = cond ? v_b : v_a;
+        b[i] = cond ? v_a : v_b;
+      }
+    } else {
+      using UT = std::make_unsigned_t<T>;
+      const UT mask = cond ? ~UT(0) : UT(0);
+      auto* lhs = reinterpret_cast<UT*>(a);
+      auto* rhs = reinterpret_cast<UT*>(b);
+      for (size_t i = 0; i < count; ++i) {
+        const UT diff = (lhs[i] ^ rhs[i]) & mask;
+        lhs[i] ^= diff;
+        rhs[i] ^= diff;
+      }
     }
   }
 };
