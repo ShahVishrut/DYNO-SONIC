@@ -95,8 +95,8 @@ void TestORam() {
     std::cout << "Testing ORam correctness with 1024 incremental inserts...\n";
     auto enc_key = GenerateKey();
     
-    // Start with capacity 2^0 = 1
-    auto oram = std::make_unique<dyno::dynamic_stepping_path_oram::ORam>(0, 8); 
+    // Start with capacity 2^1 = 2 to avoid base_cap=0
+    auto oram = std::make_unique<dyno::dynamic_stepping_path_oram::ORam>(1, 8); 
     
     // Insert keys incrementally up to 1024
     try {
