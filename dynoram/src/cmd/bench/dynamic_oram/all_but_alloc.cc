@@ -34,6 +34,13 @@ int main(int argc, char **argv) {
                   oram->MemoryBytesMovedTotal()};
 
           oram->Grow(enc_key);
+          run.init_.time_ = run.Elapsed() - prev.time_;
+          run.init_.accesses_ = oram->MemoryAccessCount() - prev.accesses_;
+          run.init_.bytes = oram->MemoryBytesMovedTotal() - prev.bytes;
+          prev = {run.Elapsed(),
+                  oram->MemoryAccessCount(),
+                  oram->MemoryBytesMovedTotal()};
+
           oram->Insert(1, {}, enc_key);
           run.insert_.time_ = run.Elapsed() - prev.time_;
           run.insert_.accesses_ = oram->MemoryAccessCount() - prev.accesses_;
