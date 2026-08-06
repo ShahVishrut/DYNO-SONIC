@@ -1,4 +1,4 @@
-COPTS = ["-std=c++20", "-faligned-allocation", "-masm=intel"]
+COPTS = ["-std=c++20", "-masm=intel"]
 
 cc_library(
     name = "oram",
