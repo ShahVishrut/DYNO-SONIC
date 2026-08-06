@@ -46,7 +46,7 @@ public:
   }
 
   // page that holds node_id (only for cold nodes: level >= cold_root_level)
-  [[nodiscard]] constexpr page_id_t page_id(node_id_t node_id) const noexcept {
+  [[nodiscard]] page_id_t page_id(node_id_t node_id) const noexcept {
     const std::uint32_t level = floor_log2(node_id);
     sn::util::log::ensure(level >= cold_start_level_, "triangle_page_mapper::page_id: node_id is not cold");
 

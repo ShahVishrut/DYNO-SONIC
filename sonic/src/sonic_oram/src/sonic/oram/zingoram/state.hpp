@@ -277,7 +277,7 @@ public:
 
   metrics& metrics_ref() noexcept { return metrics_; }
   const metrics& metrics_ref() const noexcept { return metrics_; }
-  [[nodiscard]] metrics_snapshot metrics_snapshot() const noexcept { return metrics_.snapshot(); }
+  [[nodiscard]] struct metrics_snapshot metrics_snapshot() const noexcept { return metrics_.snapshot(); }
   void reset_metrics() noexcept { metrics_.reset(); }
   [[nodiscard]] typename stash_t::metrics_snapshot stash_metrics_snapshot() const noexcept {
     return fz_stash::metrics_snapshot(stash_);

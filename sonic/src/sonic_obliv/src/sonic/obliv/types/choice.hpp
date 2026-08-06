@@ -44,14 +44,14 @@ public:
 #if defined(__clang__) && (__clang_major__ < 14)
   choice operator==(const choice& other) const noexcept {
 #else
-  constexpr choice operator==(const choice& other) const noexcept {
+  choice operator==(const choice& other) const noexcept {
 #endif
       return choice {
         ct_eq<uint8_t>(value_, other.value_)
       };
 }
 
-constexpr choice
+choice
 operator!=(const choice& other) const noexcept {
   return !(*this == other);
 }
