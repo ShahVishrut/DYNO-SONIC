@@ -169,10 +169,10 @@ static_path_oram::Block SonicORamAdapter::Read(static_path_oram::Pos p, static_p
   req.out = sn::util::span<uint8_t>(out_buf);
 
   thread_local SonicClient::access_scratch tl_scratch;
-  thread_local bool tl_scratch_init = false;
-  if (!tl_scratch_init) {
+  thread_local size_t tl_scratch_cap = 0;
+  if (tl_scratch_cap != capacity_) {
       impl_->client->configure_access_scratch(tl_scratch);
-      tl_scratch_init = true;
+      tl_scratch_cap = capacity_;
   }
 
   auto pre_ops = impl_->client->state_ref().metrics_snapshot().access_ops;
@@ -242,10 +242,10 @@ void SonicORamAdapter::Insert(static_path_oram::Block block, crypto::Key enc_key
   req.out = sn::util::span<uint8_t>(out_buf);
 
   thread_local SonicClient::access_scratch tl_scratch;
-  thread_local bool tl_scratch_init = false;
-  if (!tl_scratch_init) {
+  thread_local size_t tl_scratch_cap = 0;
+  if (tl_scratch_cap != capacity_) {
       impl_->client->configure_access_scratch(tl_scratch);
-      tl_scratch_init = true;
+      tl_scratch_cap = capacity_;
   }
 
   auto pre_ops = impl_->client->state_ref().metrics_snapshot().access_ops;
