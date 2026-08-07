@@ -71,6 +71,16 @@ cc_binary(
 )
 
 cc_binary(
+    name = "time_batch_dynamic_oram_progressive",
+    srcs = ["bench/dynamic_oram/batch_progressive_growth.cc"],
+    deps = [
+        "//src/dynamic:oram",
+        "@openssl.dev//:openssl",
+    ],
+    copts = COPTS,
+)
+
+cc_binary(
     name = "time_dynamic_oram_progressive",
     srcs = ["bench/dynamic_oram/progressive_growth.cc"],
     deps = [
