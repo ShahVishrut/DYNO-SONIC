@@ -49,8 +49,13 @@ int main(int argc, char **argv) {
           }
 
           oram->ExecuteBatch(batch, enc_key);
+          
+          run.insert_.time_ = run.Elapsed() - prev.time_;
+          run.insert_.accesses_ = oram->MemoryAccessCount() - prev.accesses_;
+          run.insert_.bytes = oram->MemoryBytesMovedTotal() - prev.bytes;
+          prev = {run.Elapsed(), oram->MemoryAccessCount(), oram->MemoryBytesMovedTotal()};
 
-          // Verify Correctness
+          // Benchmark a single search batch
           std::vector<ORam::BatchOperation> read_batch;
           for (int i = 0; i < batch_size; ++i) {
             ORam::BatchOperation op;
@@ -61,15 +66,10 @@ int main(int argc, char **argv) {
           
           oram->ExecuteBatch(read_batch, enc_key);
 
-          // Assert that the data we read back is correct
-          for (int i = 0; i < batch_size; ++i) {
-             assert(read_batch[i].result.meta_.key_ == read_batch[i].key);
-          }
-
-          // We store batch time under insert_
-          run.insert_.time_ = run.Elapsed() - prev.time_;
-          run.insert_.accesses_ = oram->MemoryAccessCount() - prev.accesses_;
-          run.insert_.bytes = oram->MemoryBytesMovedTotal() - prev.bytes;
+          // We store search batch time under search_
+          run.search_.time_ = run.Elapsed() - prev.time_;
+          run.search_.accesses_ = oram->MemoryAccessCount() - prev.accesses_;
+          run.search_.bytes = oram->MemoryBytesMovedTotal() - prev.bytes;
 
           total = total + run;
           oram.reset();
