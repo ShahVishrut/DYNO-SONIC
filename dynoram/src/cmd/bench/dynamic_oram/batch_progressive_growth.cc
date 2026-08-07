@@ -42,12 +42,14 @@ int main(int argc, char **argv) {
     
     auto enc_key = GenerateKey();
     
-    // Start at capacity 2
-    auto oram = std::make_unique<ORam>(1, 256); 
+    size_t start_po2 = 10;
+    size_t start_inserts = 1ULL << start_po2;
+    // Start at capacity 2^10
+    auto oram = std::make_unique<ORam>(start_po2, 256); 
     
     double total_batch_ms = 0;
     
-    for (size_t i = 1; i <= target_inserts; i += batch_size) {
+    for (size_t i = start_inserts; i <= target_inserts; i += batch_size) {
         double grow_ms = 0;
         
         // Trigger Grow if at capacity
