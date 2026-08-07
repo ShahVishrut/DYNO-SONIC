@@ -2,6 +2,7 @@
 #include <iostream>
 #include <string>
 #include <vector>
+#include <cassert>
 
 #include "src/dynamic/oram.h"
 #include "src/utils/crypto.h"
@@ -48,6 +49,22 @@ int main(int argc, char **argv) {
           }
 
           oram->ExecuteBatch(batch, enc_key);
+
+          // Verify Correctness
+          std::vector<ORam::BatchOperation> read_batch;
+          for (int i = 0; i < batch_size; ++i) {
+            ORam::BatchOperation op;
+            op.type = ORam::OpType::Search;
+            op.key = (i % oram->Capacity()) + 1; 
+            read_batch.push_back(op);
+          }
+          
+          oram->ExecuteBatch(read_batch, enc_key);
+
+          // Assert that the data we read back is correct
+          for (int i = 0; i < batch_size; ++i) {
+             assert(read_batch[i].result.meta_.key_ == read_batch[i].key);
+          }
 
           // We store batch time under insert_
           run.insert_.time_ = run.Elapsed() - prev.time_;
