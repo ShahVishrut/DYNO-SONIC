@@ -57,7 +57,7 @@ struct SonicORamAdapter::Impl {
     opts.routing_depth = 4; // 16 parallel subtrees
     opts.evict_batch = 16; 
     opts.access_concurrency = 16;
-    opts.disjoint_epoch_window = 128; // Max operations in a batch
+    opts.disjoint_epoch_window = 512; // Must be a multiple of num_pathreads (16 * 16 * 2 = 512)
 
     client = std::make_unique<SonicClient>(opts, std::move(*eviction_team));
     client->initialize();
