@@ -28,10 +28,10 @@ bool IsPowerOfTwo(size_t x) {
 namespace {
 
 void ObliviousSwapBlock(PORamBlock& a, PORamBlock& b, bool cond, size_t val_len) {
-    sn::obliv::ct_swap(cond, a.meta_.key_, b.meta_.key_);
-    sn::obliv::ct_swap(cond, a.meta_.pos_, b.meta_.pos_);
+    sn::obliv::ct_swap(&a.meta_.key_, &b.meta_.key_, cond);
+    sn::obliv::ct_swap(&a.meta_.pos_, &b.meta_.pos_, cond);
     for (size_t i = 0; i < val_len; ++i) {
-        sn::obliv::ct_swap(cond, a.val_.get()[i], b.val_.get()[i]);
+        sn::obliv::ct_swap(&a.val_.get()[i], &b.val_.get()[i], cond);
     }
 }
 
