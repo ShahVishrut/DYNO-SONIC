@@ -45,7 +45,7 @@ int main(int argc, char **argv) {
             ORam::BatchOperation op;
             op.type = ORam::OpType::Insert;
             op.key = (i % oram->Capacity()) + 1; 
-            batch.push_back(op);
+            batch.push_back(std::move(op));
           }
 
           oram->ExecuteBatch(batch, enc_key);
@@ -56,7 +56,7 @@ int main(int argc, char **argv) {
             ORam::BatchOperation op;
             op.type = ORam::OpType::Search;
             op.key = (i % oram->Capacity()) + 1; 
-            read_batch.push_back(op);
+            read_batch.push_back(std::move(op));
           }
           
           oram->ExecuteBatch(read_batch, enc_key);
