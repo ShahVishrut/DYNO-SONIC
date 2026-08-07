@@ -27,15 +27,15 @@ bool IsPowerOfTwo(size_t x) {
 
 namespace {
 
-void ObliviousSwapBlock(Block& a, Block& b, bool cond, size_t val_len) {
-    sn::obliv::cswap(cond, a.meta_.key_, b.meta_.key_);
-    sn::obliv::cswap(cond, a.meta_.pos_, b.meta_.pos_);
+void ObliviousSwapBlock(PORamBlock& a, PORamBlock& b, bool cond, size_t val_len) {
+    sn::obliv::ct_swap(cond, a.meta_.key_, b.meta_.key_);
+    sn::obliv::ct_swap(cond, a.meta_.pos_, b.meta_.pos_);
     for (size_t i = 0; i < val_len; ++i) {
-        sn::obliv::cswap(cond, a.val_.get()[i], b.val_.get()[i]);
+        sn::obliv::ct_swap(cond, a.val_.get()[i], b.val_.get()[i]);
     }
 }
 
-void ObliviousMergeHalves(std::vector<Block>& A, size_t start, size_t length, size_t val_len) {
+void ObliviousMergeHalves(std::vector<PORamBlock>& A, size_t start, size_t length, size_t val_len) {
     size_t step = length / 2;
     while (step > 0) {
         for (size_t i = start; i < start + length - step; ++i) {
@@ -48,7 +48,7 @@ void ObliviousMergeHalves(std::vector<Block>& A, size_t start, size_t length, si
     }
 }
 
-void OCompact(std::vector<Block>& A, size_t start, size_t length, size_t val_len) {
+void OCompact(std::vector<PORamBlock>& A, size_t start, size_t length, size_t val_len) {
     if (length <= 1) return;
     size_t half = length / 2;
     OCompact(A, start, half, val_len);
@@ -198,11 +198,11 @@ uint64_t ORam::SubORamsMemoryBytesMovedTotalSum() {
 void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key) {
   // Phase 1: Batch Preprocessing (Collapsed)
   std::map<Key, BatchOperation> collapsed;
-  for (const auto& op : batch) {
+  for (auto& op : batch) {
     if (op.type == OpType::Delete) {
       collapsed.erase(op.key); 
     } else {
-      collapsed[op.key] = op;
+      collapsed[op.key] = std::move(op);
     }
   }
 
@@ -265,7 +265,7 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key)
     k_transfer = -(y - DL + I);
     int64_t total_deletes = DS + DL;
     int64_t tightened_limit = std::min(static_cast<int64_t>(I), total_deletes - (y / 2));
-    T = y + std::max(0LL, tightened_limit);
+    T = y + std::max(static_cast<int64_t>(0), tightened_limit);
     scale_down = true;
   } else {
     int64_t B = batch.size();
@@ -316,8 +316,8 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key)
     sub_orams_[1]->InsertBatch(BufferL, enc_key);
 
     // 6. Address Translation & SONIC Native Cleanup
-    ptr_S_ += std::max(0LL, k_transfer);
-    ptr_L_ += std::max(0LL, -k_transfer);
+    ptr_S_ += std::max(static_cast<int64_t>(0), k_transfer);
+    ptr_L_ += std::max(static_cast<int64_t>(0), -k_transfer);
     capacity_ += k_transfer;
   }
 
@@ -330,3 +330,5 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key)
     sub_orams_[0] = std::make_unique<PORam>(capacity_ / 2, val_len_, true);
   }
 }
+
+} // namespace dyno::dynamic_stepping_path_oram
