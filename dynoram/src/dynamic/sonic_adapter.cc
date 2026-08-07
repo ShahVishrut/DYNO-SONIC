@@ -345,7 +345,7 @@ void SonicORamAdapter::InsertBatch(const std::vector<static_path_oram::Block>& b
   
   if (!stash_chunks.empty()) {
     auto pre_ops = impl_->client->state_ref().metrics_snapshot().access_ops;
-    sn::util::span<sn::oram::tree::block<kSonicBlockBytes>> chunk_span(stash_chunks.data(), stash_chunks.size());
+    sn::util::span<const sn::oram::tree::block<kSonicBlockBytes>> chunk_span(stash_chunks.data(), stash_chunks.size());
     sn::oram::stash::forestzing::insert_pathread_batch(impl_->client->state_ref().stash(), chunk_span);
     auto post_ops = impl_->client->state_ref().metrics_snapshot().access_ops;
     memory_access_count_ += (post_ops - pre_ops) + stash_chunks.size();
