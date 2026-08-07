@@ -5,6 +5,8 @@
 #include <stdexcept>
 #include <map>
 #include <random>
+#include <thread>
+#include <future>
 
 #include "openssl/rand.h"
 
@@ -24,7 +26,7 @@ namespace dyno::dynamic_stepping_path_oram {
 
 // Fixed block size of 256 bytes for Sonic compatibility.
 constexpr size_t kSonicBlockBytes = 256;
-using SonicTraits = sn::oram::zingoram::traits<kSonicBlockBytes, sn::oram::zingoram::epoch_mode::default_epoch, sn::oram::zingoram::storage::slab_store>;
+using SonicTraits = sn::oram::zingoram::traits<kSonicBlockBytes, sn::oram::zingoram::epoch_mode::disjoint_epoch, sn::oram::zingoram::storage::slab_store>;
 using SonicClient = sn::oram::zingoram::client<SonicTraits>;
 
 struct SonicORamAdapter::Impl {
@@ -41,18 +43,21 @@ struct SonicORamAdapter::Impl {
   Impl(size_t capacity, bool w_pos_map) : with_pos_map(w_pos_map) {
     thread_ctx.bind_current_thread();
     
-    // E=1 (single eviction thread per subtree)
+    // Create 16 eviction threads to handle the massive forest parallelism
     eviction_pool = std::make_unique<sn::threads::pthread_thread_pool>(thread_ctx, 0, "oram-evict");
-    eviction_team = std::make_unique<sn::threads::thread_team>(eviction_pool->pool(), 1);
+    eviction_team = std::make_unique<sn::threads::thread_team>(eviction_pool->pool(), 16);
 
     SonicTraits::options_t opts{};
-    opts.block_count = capacity + 1; // Allocate 1 extra block for safe dummy accesses
+    opts.block_count = capacity + 1;
     opts.bucket_real_size = 5;
     opts.bucket_dummy_size = 7;
-    opts.eviction_rate = 0; // 0 means auto-compute optimal eviction rate based on bucket size
-    opts.routing_depth = 0; // r=0 (forest cut depth)
-    opts.evict_batch = 1; // E=1
-    opts.access_concurrency = 1;
+    opts.eviction_rate = 0; 
+    
+    // Unlock SONIC Batch Parallelism
+    opts.routing_depth = 4; // 16 parallel subtrees
+    opts.evict_batch = 16; 
+    opts.access_concurrency = 16;
+    opts.disjoint_epoch_window = 128; // Max operations in a batch
 
     client = std::make_unique<SonicClient>(opts, std::move(*eviction_team));
     client->initialize();
@@ -83,7 +88,7 @@ SonicORamAdapter::SonicORamAdapter(size_t n, size_t val_len, const std::string &
 
 SonicORamAdapter::~SonicORamAdapter() = default;
 
-static_path_oram::Block SonicORamAdapter::ReadAndRemove(static_path_oram::Pos p, static_path_oram::Key k, crypto::Key enc_key, bool is_real) {
+static_path_oram::Block SonicORamAdapter::ReadAndRemove(static_path_oram::Pos p, static_path_oram::Key k, crypto::Key enc_key, bool is_real, bool flush) {
   uint64_t cur_leaf = sn::obliv::ct_select<uint64_t>(p - 1, 0, is_real);
   uint64_t new_leaf = impl_->GenerateLeaf();
   if (impl_->with_pos_map) {
@@ -108,8 +113,16 @@ static_path_oram::Block SonicORamAdapter::ReadAndRemove(static_path_oram::Pos p,
   req.in = sn::util::span<uint8_t>(in_buf);
   req.out = sn::util::span<uint8_t>(out_buf);
 
+  thread_local SonicClient::access_scratch tl_scratch;
+  thread_local bool tl_scratch_init = false;
+  if (!tl_scratch_init) {
+      impl_->client->configure_access_scratch(tl_scratch);
+      tl_scratch_init = true;
+  }
+
   auto pre_ops = impl_->client->state_ref().metrics_snapshot().access_ops;
-  impl_->client->access(req, impl_->scratch);
+  impl_->client->access(req, tl_scratch);
+  if (flush) impl_->client->flush_epoch();
   auto post_ops = impl_->client->state_ref().metrics_snapshot().access_ops;
   memory_access_count_ += (post_ops - pre_ops);
   memory_bytes_moved_total_ += (post_ops - pre_ops) * kSonicBlockBytes * 2;
@@ -129,7 +142,7 @@ static_path_oram::Block SonicORamAdapter::ReadAndRemove(static_path_oram::Pos p,
   return res;
 }
 
-static_path_oram::Block SonicORamAdapter::Read(static_path_oram::Pos p, static_path_oram::Key k, crypto::Key enc_key, bool is_real) {
+static_path_oram::Block SonicORamAdapter::Read(static_path_oram::Pos p, static_path_oram::Key k, crypto::Key enc_key, bool is_real, bool flush) {
   uint64_t cur_leaf = sn::obliv::ct_select<uint64_t>(p - 1, 0, is_real);
   uint64_t new_leaf = impl_->GenerateLeaf();
 
@@ -155,8 +168,16 @@ static_path_oram::Block SonicORamAdapter::Read(static_path_oram::Pos p, static_p
   req.in = sn::util::span<uint8_t>(in_buf);
   req.out = sn::util::span<uint8_t>(out_buf);
 
+  thread_local SonicClient::access_scratch tl_scratch;
+  thread_local bool tl_scratch_init = false;
+  if (!tl_scratch_init) {
+      impl_->client->configure_access_scratch(tl_scratch);
+      tl_scratch_init = true;
+  }
+
   auto pre_ops = impl_->client->state_ref().metrics_snapshot().access_ops;
-  impl_->client->access(req, impl_->scratch);
+  impl_->client->access(req, tl_scratch);
+  if (flush) impl_->client->flush_epoch();
   auto post_ops = impl_->client->state_ref().metrics_snapshot().access_ops;
   memory_access_count_ += (post_ops - pre_ops);
   memory_bytes_moved_total_ += (post_ops - pre_ops) * kSonicBlockBytes * 2;
@@ -178,7 +199,7 @@ static_path_oram::Block SonicORamAdapter::Read(static_path_oram::Pos p, static_p
   return res;
 }
 
-void SonicORamAdapter::Insert(static_path_oram::Block block, crypto::Key enc_key, bool is_real, bool is_new) {
+void SonicORamAdapter::Insert(static_path_oram::Block block, crypto::Key enc_key, bool is_real, bool is_new, bool flush) {
   uint64_t k = block.meta_.key_;
   bool real = is_real & !sn::obliv::ct_eq<uint64_t>(k, 0);
   uint64_t cur_leaf = 0;
@@ -220,6 +241,13 @@ void SonicORamAdapter::Insert(static_path_oram::Block block, crypto::Key enc_key
   req.in = sn::util::span<uint8_t>(in_buf);
   req.out = sn::util::span<uint8_t>(out_buf);
 
+  thread_local SonicClient::access_scratch tl_scratch;
+  thread_local bool tl_scratch_init = false;
+  if (!tl_scratch_init) {
+      impl_->client->configure_access_scratch(tl_scratch);
+      tl_scratch_init = true;
+  }
+
   auto pre_ops = impl_->client->state_ref().metrics_snapshot().access_ops;
   if (is_new && real) {
     sn::oram::tree::block<kSonicBlockBytes> new_block{};
@@ -228,11 +256,100 @@ void SonicORamAdapter::Insert(static_path_oram::Block block, crypto::Key enc_key
     std::copy(in_buf.begin(), in_buf.end(), new_block.data.begin());
     impl_->client->insert(new_block);
   } else {
-    impl_->client->access(req, impl_->scratch);
+    impl_->client->access(req, tl_scratch);
   }
+  if (flush) impl_->client->flush_epoch();
   auto post_ops = impl_->client->state_ref().metrics_snapshot().access_ops;
   memory_access_count_ += (post_ops - pre_ops);
   memory_bytes_moved_total_ += (post_ops - pre_ops) * kSonicBlockBytes * 2;
+}
+
+void SonicORamAdapter::FlushEpoch() {
+  impl_->client->flush_epoch();
+}
+
+std::vector<static_path_oram::Block> SonicORamAdapter::ReadAndRemoveBatch(const std::vector<std::pair<static_path_oram::Key, bool>>& keys_with_real_flags, crypto::Key enc_key) {
+  std::vector<static_path_oram::Block> results;
+  results.reserve(keys_with_real_flags.size());
+  for (size_t i = 0; i < keys_with_real_flags.size(); ++i) {
+    results.emplace_back(true);
+  }
+
+  int num_workers = 16;
+  std::vector<std::thread> workers;
+  for (int i = 0; i < num_workers; ++i) {
+    workers.emplace_back([this, i, num_workers, &keys_with_real_flags, enc_key, &results]() {
+      for (size_t j = i; j < keys_with_real_flags.size(); j += num_workers) {
+        auto& [k, is_real] = keys_with_real_flags[j];
+        results[j] = ReadAndRemove(0, k, enc_key, is_real, false);
+      }
+    });
+  }
+  for (auto& w : workers) w.join();
+
+  impl_->client->flush_epoch();
+  return results;
+}
+
+std::vector<static_path_oram::Block> SonicORamAdapter::ReadBatch(const std::vector<std::pair<static_path_oram::Key, bool>>& keys_with_real_flags, crypto::Key enc_key) {
+  std::vector<static_path_oram::Block> results;
+  results.reserve(keys_with_real_flags.size());
+  for (size_t i = 0; i < keys_with_real_flags.size(); ++i) {
+    results.emplace_back(true);
+  }
+
+  int num_workers = 16;
+  std::vector<std::thread> workers;
+  for (int i = 0; i < num_workers; ++i) {
+    workers.emplace_back([this, i, num_workers, &keys_with_real_flags, enc_key, &results]() {
+      for (size_t j = i; j < keys_with_real_flags.size(); j += num_workers) {
+        auto& [k, is_real] = keys_with_real_flags[j];
+        results[j] = Read(0, k, enc_key, is_real, false);
+      }
+    });
+  }
+  for (auto& w : workers) w.join();
+
+  impl_->client->flush_epoch();
+  return results;
+}
+
+void SonicORamAdapter::InsertBatch(const std::vector<static_path_oram::Block>& blocks, crypto::Key enc_key) {
+  if (impl_->with_pos_map) {
+    // Dynamic resizing as permitted by threat model
+    impl_->pos_map.resize(impl_->pos_map.size() + blocks.size(), 0);
+  }
+  
+  std::vector<sn::oram::tree::block<kSonicBlockBytes>> stash_chunks;
+  for (const auto& block : blocks) {
+    uint64_t k = block.meta_.key_;
+    if (k == 0) continue;
+    
+    uint64_t write_leaf = impl_->GenerateLeaf();
+    if (impl_->with_pos_map) {
+      impl_->pos_map[k] = write_leaf;
+    }
+    
+    sn::oram::tree::block<kSonicBlockBytes> new_block{};
+    new_block.address = k - 1;
+    new_block.leaf_ix = write_leaf;
+    
+    std::vector<uint8_t> in_buf(kSonicBlockBytes, 0);
+    size_t block_size = static_path_oram::BlockSize(val_len_);
+    if (block_size <= kSonicBlockBytes) {
+      block.ToBytes(val_len_, in_buf.data());
+    }
+    std::copy(in_buf.begin(), in_buf.end(), new_block.data.begin());
+    stash_chunks.push_back(std::move(new_block));
+  }
+  
+  if (!stash_chunks.empty()) {
+    auto pre_ops = impl_->client->state_ref().metrics_snapshot().access_ops;
+    sn::oram::stash::forestzing::insert_pathread_batch(impl_->client->state_ref().stash(), sn::util::span(stash_chunks));
+    auto post_ops = impl_->client->state_ref().metrics_snapshot().access_ops;
+    memory_access_count_ += (post_ops - pre_ops) + stash_chunks.size();
+    memory_bytes_moved_total_ += ((post_ops - pre_ops) + stash_chunks.size()) * kSonicBlockBytes * 2;
+  }
 }
 
 uint64_t SonicORamAdapter::GenerateRandomLeaf() const {

@@ -19,9 +19,14 @@ class SonicORamAdapter {
                    bool with_pos_map = false, bool with_key_gen = false);
   ~SonicORamAdapter();
 
-  static_path_oram::Block ReadAndRemove(static_path_oram::Pos p, static_path_oram::Key k, crypto::Key enc_key, bool is_real = true);
-  static_path_oram::Block Read(static_path_oram::Pos p, static_path_oram::Key k, crypto::Key enc_key, bool is_real = true);
-  void Insert(static_path_oram::Block block, crypto::Key enc_key, bool is_real = true, bool is_new = false);
+  static_path_oram::Block ReadAndRemove(static_path_oram::Pos p, static_path_oram::Key k, crypto::Key enc_key, bool is_real = true, bool flush = true);
+  static_path_oram::Block Read(static_path_oram::Pos p, static_path_oram::Key k, crypto::Key enc_key, bool is_real = true, bool flush = true);
+  void Insert(static_path_oram::Block block, crypto::Key enc_key, bool is_real = true, bool is_new = false, bool flush = true);
+  void FlushEpoch();
+
+  std::vector<static_path_oram::Block> ReadAndRemoveBatch(const std::vector<std::pair<static_path_oram::Key, bool>>& keys_with_real_flags, crypto::Key enc_key);
+  std::vector<static_path_oram::Block> ReadBatch(const std::vector<std::pair<static_path_oram::Key, bool>>& keys_with_real_flags, crypto::Key enc_key);
+  void InsertBatch(const std::vector<static_path_oram::Block>& blocks, crypto::Key enc_key);
 
   [[nodiscard]] uint64_t GenerateRandomLeaf() const;
   

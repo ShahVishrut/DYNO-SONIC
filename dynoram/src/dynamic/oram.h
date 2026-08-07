@@ -37,6 +37,17 @@ class ORam {
   Block ReadAndRemove(Key k, crypto::Key enc_key);
   Block Read(Key k, crypto::Key enc_key);
   void Insert(Key k, Val v, crypto::Key enc_key);
+  enum class OpType { Search, Update, Delete, Insert };
+
+  struct BatchOperation {
+    OpType type;
+    Key key;
+    Val val; // For Update/Insert
+    Block result; // For Search
+  };
+
+  void ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key);
+
   [[nodiscard]] size_t Capacity() const { return capacity_; }
   [[nodiscard]] size_t Size() const { return size_; }
   [[nodiscard]] uint64_t MemoryAccessCount() const { return memory_access_count_; }
@@ -48,6 +59,8 @@ class ORam {
   size_t size_ = 0;
   std::array<std::unique_ptr<PORam>, 2> sub_orams_{};
   uint8_t SubOramIndex(Key k);
+  uint64_t ptr_S_ = 0;
+  uint64_t ptr_L_ = 0;
   uint64_t memory_access_count_ = 0;
   uint64_t memory_bytes_moved_total_ = 0;
   uint64_t SubORamsMemoryAccessCountSum();

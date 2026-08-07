@@ -25,6 +25,39 @@ bool IsPowerOfTwo(size_t x) {
   return !(x & (x - 1));
 }
 
+namespace {
+
+void ObliviousSwapBlock(Block& a, Block& b, bool cond, size_t val_len) {
+    sn::obliv::cswap(cond, a.meta_.key_, b.meta_.key_);
+    sn::obliv::cswap(cond, a.meta_.pos_, b.meta_.pos_);
+    for (size_t i = 0; i < val_len; ++i) {
+        sn::obliv::cswap(cond, a.val_.get()[i], b.val_.get()[i]);
+    }
+}
+
+void ObliviousMergeHalves(std::vector<Block>& A, size_t start, size_t length, size_t val_len) {
+    size_t step = length / 2;
+    while (step > 0) {
+        for (size_t i = start; i < start + length - step; ++i) {
+            bool left_dummy = sn::obliv::ct_eq<uint64_t>(A[i].meta_.key_, 0);
+            bool right_real = !sn::obliv::ct_eq<uint64_t>(A[i + step].meta_.key_, 0);
+            bool cond = left_dummy & right_real;
+            ObliviousSwapBlock(A[i], A[i + step], cond, val_len);
+        }
+        step /= 2;
+    }
+}
+
+void OCompact(std::vector<Block>& A, size_t start, size_t length, size_t val_len) {
+    if (length <= 1) return;
+    size_t half = length / 2;
+    OCompact(A, start, half, val_len);
+    OCompact(A, start + half, half, val_len);
+    ObliviousMergeHalves(A, start, length, val_len);
+}
+
+} // namespace
+
 void ORam::Grow(crypto::Key enc_key) {
   if (capacity_ == 0) {
     sub_orams_[1] = std::make_unique<PORam>(1, val_len_, true);
@@ -162,4 +195,138 @@ uint64_t ORam::SubORamsMemoryBytesMovedTotalSum() {
   return res;
 }
 
-} // dyno::dynamic_stepping_path_oram
+void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key) {
+  // Phase 1: Batch Preprocessing (Collapsed)
+  std::map<Key, BatchOperation> collapsed;
+  for (const auto& op : batch) {
+    if (op.type == OpType::Delete) {
+      collapsed.erase(op.key); 
+    } else {
+      collapsed[op.key] = op;
+    }
+  }
+
+  // Phase 2: Concurrent Client Execution
+  size_t I = 0, DS = 0, DL = 0;
+  std::vector<Block> inserts;
+  std::vector<std::pair<Key, bool>> small_reads, large_reads;
+
+  for (auto& [k, op] : collapsed) {
+    if (op.type == OpType::Insert) {
+      ++I;
+      Block b;
+      b.key_ = k;
+      if (op.val) {
+        b.val_ = std::make_unique<uint8_t[]>(val_len_);
+        std::copy(op.val.get(), op.val.get() + val_len_, b.val_.get());
+      }
+      inserts.push_back(std::move(b));
+    } else {
+      uint8_t idx = SubOramIndex(k);
+      
+      small_reads.push_back({k, idx == 0});
+      large_reads.push_back({k, idx == 1});
+
+      if (op.type == OpType::Delete) {
+        if (idx == 0) DS++; 
+        else DL++;
+      }
+    }
+  }
+
+  // Dispatch reads/deletes concurrently to BOTH tiers to hide location
+  if (sub_orams_[0]) sub_orams_[0]->ReadBatch(small_reads, enc_key);
+  if (sub_orams_[1]) sub_orams_[1]->ReadBatch(large_reads, enc_key);
+
+  // Directly append inserts to Slarge
+  if (sub_orams_[1]) {
+    std::vector<static_path_oram::Block> sn_inserts;
+    for (auto& b : inserts) sn_inserts.push_back(static_path_oram::Block(0, b.key_));
+    sub_orams_[1]->InsertBatch(sn_inserts, enc_key);
+  }
+
+  // Phase 3: Oblivious Net Growth & Boundary Checking
+  int64_t a = I - DS - DL;
+  int64_t x = sub_orams_[0] ? sub_orams_[0]->Capacity() : 0;
+  int64_t y = sub_orams_[1] ? sub_orams_[1]->Capacity() : 0;
+
+  int64_t target_small = x - a;
+  int64_t target_large = y + 2*a;
+
+  int64_t k_transfer = a - DS;
+  bool scale_up = false, scale_down = false;
+  int64_t T = 0;
+
+  if (target_small <= 0) {
+    k_transfer = x - DS;
+    T = x;
+    scale_up = true;
+  } else if (target_large <= 0) {
+    k_transfer = -(y - DL + I);
+    int64_t total_deletes = DS + DL;
+    int64_t tightened_limit = std::min(static_cast<int64_t>(I), total_deletes - (y / 2));
+    T = y + std::max(0LL, tightened_limit);
+    scale_down = true;
+  } else {
+    int64_t B = batch.size();
+    T = std::max(std::abs(B - a), std::abs(a));
+  }
+
+  // Phase 4: Oblivious Buffer Swapping & Transfer (via SONIC Global Stashes)
+  if (sub_orams_[0] && sub_orams_[1] && T > 0) {
+    // 1. Pad T to power of 2 for OCompact
+    uint64_t T_pow2 = 1;
+    while (T_pow2 < T) T_pow2 *= 2;
+
+    // 2. Deterministic Batch Extraction into Enclave
+    std::vector<std::pair<Key, bool>> S_keys;
+    std::vector<std::pair<Key, bool>> L_keys;
+    for (uint64_t i = 0; i < T; ++i) {
+        S_keys.push_back({(ptr_S_ + i) % sub_orams_[0]->Capacity() + 1, true});
+        L_keys.push_back({(ptr_L_ + i) % sub_orams_[1]->Capacity() + 1, true});
+    }
+
+    auto BufferS = sub_orams_[0]->ReadAndRemoveBatch(S_keys, enc_key);
+    auto BufferL = sub_orams_[1]->ReadAndRemoveBatch(L_keys, enc_key);
+
+    // Pad buffers to T_pow2 with pure dummies
+    for (uint64_t i = T; i < T_pow2; ++i) {
+        BufferS.emplace_back(true);
+        BufferL.emplace_back(true);
+    }
+
+    // 3. Oblivious Compaction
+    OCompact(BufferS, 0, T_pow2, val_len_);
+    OCompact(BufferL, 0, T_pow2, val_len_);
+
+    // 4. Double-Oblivious Swapping
+    for (uint64_t i = 0; i < T; ++i) {
+        bool swap_pos = (k_transfer > 0) && (i < static_cast<uint64_t>(k_transfer));
+        bool swap_neg = (k_transfer < 0) && (i < static_cast<uint64_t>(-k_transfer));
+        bool should_swap = swap_pos | swap_neg;
+        ObliviousSwapBlock(BufferS[i], BufferL[i], should_swap, val_len_);
+    }
+
+    // Truncate padded dummies before inserting
+    BufferS.erase(BufferS.begin() + T, BufferS.end());
+    BufferL.erase(BufferL.begin() + T, BufferL.end());
+
+    // 5. Flush to Stashes
+    sub_orams_[0]->InsertBatch(BufferS, enc_key);
+    sub_orams_[1]->InsertBatch(BufferL, enc_key);
+
+    // 6. Address Translation & SONIC Native Cleanup
+    ptr_S_ += std::max(0LL, k_transfer);
+    ptr_L_ += std::max(0LL, -k_transfer);
+    capacity_ += k_transfer;
+  }
+
+  // Phase 5: Cascading Resizing & Secondary Transfer
+  if (scale_up) {
+    sub_orams_[0] = std::move(sub_orams_[1]);
+    sub_orams_[1] = std::make_unique<PORam>(2 * capacity_, val_len_, true);
+  } else if (scale_down) {
+    sub_orams_[1] = std::move(sub_orams_[0]);
+    sub_orams_[0] = std::make_unique<PORam>(capacity_ / 2, val_len_, true);
+  }
+}
