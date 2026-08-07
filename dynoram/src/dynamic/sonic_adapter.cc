@@ -51,7 +51,7 @@ struct SonicORamAdapter::Impl {
     opts.block_count = capacity + 1;
     opts.bucket_real_size = 5;
     opts.bucket_dummy_size = 7;
-    opts.eviction_rate = 0; 
+    opts.eviction_rate = 2; // Lock base eviction rate to 2
     
     // Unlock SONIC Batch Parallelism
     opts.routing_depth = 4; // 16 parallel subtrees
