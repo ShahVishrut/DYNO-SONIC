@@ -337,7 +337,7 @@ void SonicORamAdapter::InsertBatch(const std::vector<static_path_oram::Block>& b
     std::vector<uint8_t> in_buf(kSonicBlockBytes, 0);
     size_t block_size = static_path_oram::BlockSize(val_len_);
     if (block_size <= kSonicBlockBytes) {
-      block.ToBytes(val_len_, in_buf.data());
+      const_cast<static_path_oram::Block&>(block).ToBytes(val_len_, in_buf.data());
     }
     std::copy(in_buf.begin(), in_buf.end(), new_block.data.begin());
     stash_chunks.push_back(std::move(new_block));
@@ -345,7 +345,8 @@ void SonicORamAdapter::InsertBatch(const std::vector<static_path_oram::Block>& b
   
   if (!stash_chunks.empty()) {
     auto pre_ops = impl_->client->state_ref().metrics_snapshot().access_ops;
-    sn::oram::stash::forestzing::insert_pathread_batch(impl_->client->state_ref().stash(), sn::util::span(stash_chunks));
+    sn::util::span<sn::oram::tree::block<kSonicBlockBytes>> chunk_span(stash_chunks.data(), stash_chunks.size());
+    sn::oram::stash::forestzing::insert_pathread_batch(impl_->client->state_ref().stash(), chunk_span);
     auto post_ops = impl_->client->state_ref().metrics_snapshot().access_ops;
     memory_access_count_ += (post_ops - pre_ops) + stash_chunks.size();
     memory_bytes_moved_total_ += ((post_ops - pre_ops) + stash_chunks.size()) * kSonicBlockBytes * 2;
