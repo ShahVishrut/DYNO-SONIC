@@ -597,19 +597,50 @@ void SonicORamAdapter::InsertBatch(std::vector<static_path_oram::Block>& blocks,
       }
   }
 
-  if (!stash_chunks.empty()) {
-    auto pre_ops = impl_->client->state_ref().metrics_snapshot().access_ops;
-    
-    size_t max_insert_chunk = 256; 
-    for (size_t i = 0; i < stash_chunks.size(); i += max_insert_chunk) {
-       size_t len = std::min(max_insert_chunk, stash_chunks.size() - i);
-       sn::util::span<const sn::oram::tree::block<kSonicBlockBytes>> chunk_span(stash_chunks.data() + i, len);
-       sn::oram::stash::forestzing::insert_pathread_batch(impl_->client->state_ref().stash(), chunk_span);
-    }
-    
-    auto post_ops = impl_->client->state_ref().metrics_snapshot().access_ops;
-    memory_access_count_ += (post_ops - pre_ops) + stash_chunks.size();
-    memory_bytes_moved_total_ += ((post_ops - pre_ops) + stash_chunks.size()) * kSonicBlockBytes * 2;
+  size_t insert_count = 0;
+  thread_local SonicClient::access_scratch tl_scratch;
+  thread_local size_t tl_scratch_cap = 0;
+  if (tl_scratch_cap != capacity_) {
+      impl_->client->configure_access_scratch(tl_scratch);
+      tl_scratch_cap = capacity_;
+  }
+
+  for (size_t j = 0; j < B; ++j) {
+      uint64_t k = blocks[j].meta_.key_;
+      bool real = (!sn::obliv::ct_eq<uint64_t>(k, 0));
+      
+      if (batch_is_new[j] && real) {
+          sn::oram::tree::block<kSonicBlockBytes> new_block{};
+          new_block.address = k - 1;
+          new_block.leaf_ix = batch_new_leaves[j];
+          
+          std::vector<uint8_t> in_buf(kSonicBlockBytes, 0);
+          size_t block_size = static_path_oram::BlockSize(val_len_);
+          if (block_size <= kSonicBlockBytes) {
+              blocks[j].ToBytes(val_len_, in_buf.data());
+          }
+          std::copy(in_buf.begin(), in_buf.end(), new_block.data.begin());
+          impl_->client->insert(new_block);
+          
+          insert_count++;
+          if (insert_count % 128 == 0) {
+              // Perform a dummy access to properly advance the epoch,
+              // apply backpressure, and trigger evaporation safely.
+              sn::oram::access_request req;
+              req.address = capacity_;
+              req.cur_leaf = impl_->GenerateLeaf();
+              req.new_leaf = req.cur_leaf;
+              req.is_write = false;
+              std::vector<uint8_t> dummy_buf(kSonicBlockBytes, 0);
+              req.in = sn::util::span<uint8_t>(dummy_buf);
+              req.out = sn::util::span<uint8_t>(dummy_buf);
+              impl_->client->access(req, tl_scratch);
+          }
+      }
+  }
+
+  if (insert_count % 128 != 0) {
+      impl_->client->flush_epoch();
   }
 }
 
