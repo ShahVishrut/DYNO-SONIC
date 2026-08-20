@@ -268,7 +268,7 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key)
     bool seq_lt = sn::obliv::ct_lt(a.seq, b.seq);
     return sn::obliv::ct_select(seq_lt, key_lt, key_eq);
   };
-  sn::sortshuffle::ser::detail::bitonic_sort_impl(elems.data(), B, key_ext, comp1, hook);
+  sn::sortshuffle::ser::bitonic::detail::bitonic_sort_impl(elems.data(), B, key_ext, comp1, hook);
 
   // Phase 2: O-Scan (Collapse)
   for (size_t i = 0; i < B - 1; ++i) {
@@ -287,7 +287,7 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key)
     bool dummy_lt = (!a.is_dummy) && b.is_dummy;
     return sn::obliv::ct_select(dummy_lt, type_lt, type_eq);
   };
-  sn::sortshuffle::ser::detail::bitonic_sort_impl(elems.data(), B, key_ext, comp2, hook);
+  sn::sortshuffle::ser::bitonic::detail::bitonic_sort_impl(elems.data(), B, key_ext, comp2, hook);
 
   // Calculate Real Net Growth Obliviously
   size_t real_I = 0, real_DS = 0, real_DL = 0;
@@ -363,13 +363,13 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key)
   // Phase 4: Oblivious Buffer Swapping & Transfer (via SONIC Global Stashes)
   if (sub_orams_[0] && sub_orams_[1] && T > 0) {
     // 1. Pad T to power of 2 for OCompact
-    uint64_t T_pow2 = 1;
+    int64_t T_pow2 = 1;
     while (T_pow2 < T) T_pow2 *= 2;
 
     // 2. Deterministic Batch Extraction into Enclave
     std::vector<std::pair<Key, bool>> S_keys;
     std::vector<std::pair<Key, bool>> L_keys;
-    for (uint64_t i = 0; i < T; ++i) {
+    for (int64_t i = 0; i < T; ++i) {
         S_keys.push_back({(ptr_S_ + i) % sub_orams_[0]->Capacity() + 1, true});
         L_keys.push_back({(ptr_L_ + i) % sub_orams_[1]->Capacity() + 1, true});
     }
