@@ -635,10 +635,13 @@ void SonicORamAdapter::InsertBatch(std::vector<static_path_oram::Block>& blocks,
                   req.out = sn::util::span<uint8_t>(dummy_buf);
                   impl_->client->access(req, tl_scratch);
               }
+              if (insert_count % 256 == 0) {
+                  impl_->client->flush_epoch();
+              }
           }
       }
 
-      if (insert_count % 16 != 0) {
+      if (insert_count % 256 != 0) {
           impl_->client->flush_epoch();
       }
   } catch (const std::exception& e) {
