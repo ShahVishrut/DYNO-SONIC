@@ -273,8 +273,38 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key)
   // Phase 2: O-Scan (Collapse)
   for (size_t i = 0; i < B - 1; ++i) {
     bool same_key = sn::obliv::ct_eq(elems[i].key, elems[i+1].key);
+    
+    bool is_i_insert = sn::obliv::ct_eq(elems[i].op_type, static_cast<uint8_t>(0));
+    bool is_i_delete = sn::obliv::ct_eq(elems[i].op_type, static_cast<uint8_t>(2));
+    bool is_next_search = sn::obliv::ct_eq(elems[i+1].op_type, static_cast<uint8_t>(1));
+    
+    bool transform_to_insert = same_key & is_i_insert & is_next_search;
+    bool transform_to_delete = same_key & is_i_delete & is_next_search;
+    
+    elems[i+1].op_type = sn::obliv::ct_select<uint8_t>(0, elems[i+1].op_type, transform_to_insert);
+    elems[i+1].op_type = sn::obliv::ct_select<uint8_t>(2, elems[i+1].op_type, transform_to_delete);
+    
+    if (val_len_ > 0) {
+        sn::obliv::ct_swap_array(batch[i].val.get(), batch[i+1].val.get(), val_len_, transform_to_insert);
+    }
+    
     sn::obliv::ct_set_ref(elems[i].is_dummy, true, same_key);
   }
+
+  // Calculate Real Net Growth Obliviously BEFORE Deletes are forced to dummies
+  size_t real_I = 0, real_DS = 0, real_DL = 0;
+  for (size_t i = 0; i < B; ++i) {
+    bool is_real = !elems[i].is_dummy;
+    bool is_insert = sn::obliv::ct_eq(elems[i].op_type, static_cast<uint8_t>(0));
+    bool is_delete = sn::obliv::ct_eq(elems[i].op_type, static_cast<uint8_t>(2));
+    uint8_t idx = SubOramIndex(elems[i].key);
+    
+    real_I += sn::obliv::ct_select<size_t>(1, 0, is_real && is_insert);
+    real_DS += sn::obliv::ct_select<size_t>(1, 0, is_real && is_delete && (idx == 0));
+    real_DL += sn::obliv::ct_select<size_t>(1, 0, is_real && is_delete && (idx == 1));
+  }
+
+  // Now we can safely force Deletes to be dummies so they don't trigger real ORAM reads
   for (size_t i = 0; i < B; ++i) {
     bool is_delete = sn::obliv::ct_eq(elems[i].op_type, static_cast<uint8_t>(2));
     sn::obliv::ct_set_ref(elems[i].is_dummy, true, is_delete);
@@ -288,19 +318,6 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key)
     return sn::obliv::ct_select(dummy_lt, type_lt, type_eq);
   };
   sn::sortshuffle::ser::bitonic::detail::bitonic_sort_impl(elems.data(), B, key_ext, comp2, hook);
-
-  // Calculate Real Net Growth Obliviously
-  size_t real_I = 0, real_DS = 0, real_DL = 0;
-  for (size_t i = 0; i < B; ++i) {
-    bool is_real = !elems[i].is_dummy;
-    bool is_insert = sn::obliv::ct_eq(elems[i].op_type, static_cast<uint8_t>(0));
-    bool is_delete = sn::obliv::ct_eq(elems[i].op_type, static_cast<uint8_t>(2));
-    uint8_t idx = SubOramIndex(elems[i].key);
-    
-    real_I += sn::obliv::ct_select<size_t>(1, 0, is_real && is_insert);
-    real_DS += sn::obliv::ct_select<size_t>(1, 0, is_real && is_delete && (idx == 0));
-    real_DL += sn::obliv::ct_select<size_t>(1, 0, is_real && is_delete && (idx == 1));
-  }
 
   // Dispatch exactly to Public Bounds
   std::vector<Block> inserts;

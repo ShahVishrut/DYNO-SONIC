@@ -542,19 +542,7 @@ void SonicORamAdapter::InsertBatch(std::vector<static_path_oram::Block>& blocks,
               uint64_t k = blocks[j].meta_.key_;
               bool real = (!sn::obliv::ct_eq<uint64_t>(k, 0));
               
-              if (batch_is_new[j] && real) {
-                  sn::oram::tree::block<kSonicBlockBytes> new_block{};
-                  new_block.address = k - 1;
-                  new_block.leaf_ix = batch_new_leaves[j];
-                  
-                  std::vector<uint8_t> in_buf(kSonicBlockBytes, 0);
-                  size_t block_size = static_path_oram::BlockSize(val_len_);
-                  if (block_size <= kSonicBlockBytes) {
-                      blocks[j].ToBytes(val_len_, in_buf.data());
-                  }
-                  std::copy(in_buf.begin(), in_buf.end(), new_block.data.begin());
-                  impl_->client->insert(new_block);
-              } else {
+              if (!batch_is_new[j] || !real) {
                   sn::oram::access_request req;
                   req.address = sn::obliv::ct_select<uint64_t>(k - 1, capacity_, real);
                   req.cur_leaf = batch_cur_leaves[j];
@@ -585,6 +573,33 @@ void SonicORamAdapter::InsertBatch(std::vector<static_path_oram::Block>& blocks,
   for (int i = 0; i < num_workers; ++i) {
       memory_access_count_ += thread_access_ops[i];
       memory_bytes_moved_total_ += thread_access_ops[i] * kSonicBlockBytes * 2;
+  }
+
+  // Sequentially insert into the global stash to prevent std::vector corruption,
+  // flushing every 500 blocks to prevent snapshot capacity overflow.
+  size_t insert_count = 0;
+  for (size_t j = 0; j < B; ++j) {
+      uint64_t k = blocks[j].meta_.key_;
+      bool real = (!sn::obliv::ct_eq<uint64_t>(k, 0));
+      
+      if (batch_is_new[j] && real) {
+          sn::oram::tree::block<kSonicBlockBytes> new_block{};
+          new_block.address = k - 1;
+          new_block.leaf_ix = batch_new_leaves[j];
+          
+          std::vector<uint8_t> in_buf(kSonicBlockBytes, 0);
+          size_t block_size = static_path_oram::BlockSize(val_len_);
+          if (block_size <= kSonicBlockBytes) {
+              blocks[j].ToBytes(val_len_, in_buf.data());
+          }
+          std::copy(in_buf.begin(), in_buf.end(), new_block.data.begin());
+          impl_->client->insert(new_block);
+          
+          insert_count++;
+          if (insert_count % 500 == 0) {
+              impl_->client->flush_epoch();
+          }
+      }
   }
 
   impl_->client->flush_epoch();
