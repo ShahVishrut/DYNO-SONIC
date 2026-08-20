@@ -323,15 +323,15 @@ void SonicORamAdapter::InsertBatch(const std::vector<static_path_oram::Block>& b
   std::vector<sn::oram::tree::block<kSonicBlockBytes>> stash_chunks;
   for (const auto& block : blocks) {
     uint64_t k = block.meta_.key_;
-    if (k == 0) continue;
+    bool is_real = !sn::obliv::ct_eq<uint64_t>(k, 0);
     
     uint64_t write_leaf = impl_->GenerateLeaf();
     if (impl_->with_pos_map) {
-      impl_->pos_map[k] = write_leaf;
+      impl_->pos_map[k] = sn::obliv::ct_select<uint64_t>(write_leaf, impl_->pos_map[k], is_real);
     }
     
     sn::oram::tree::block<kSonicBlockBytes> new_block{};
-    new_block.address = k - 1;
+    new_block.address = sn::obliv::ct_select<int64_t>(k - 1, -1, is_real);
     new_block.leaf_ix = write_leaf;
     
     std::vector<uint8_t> in_buf(kSonicBlockBytes, 0);

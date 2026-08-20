@@ -1,0 +1,123 @@
+#include <chrono>
+#include <iostream>
+#include <vector>
+#include <memory>
+#include <cstring>
+#include <string>
+#include <random>
+
+#include "src/dynamic/oram.h"
+#include "src/utils/crypto.h"
+
+using namespace dyno::crypto;
+using namespace dyno::dynamic_stepping_path_oram;
+
+struct BenchmarkResult {
+    size_t batch_size;
+    double latency_ms;
+    double throughput_ops_sec;
+};
+
+BenchmarkResult MeasureThroughput(
+    ORam* oram, 
+    crypto::Key enc_key,
+    int work_type, // 0: Insert, 1: Search, 2: Delete, 3: Mixed
+    double target_sla_ms
+) {
+    size_t low = 1;
+    size_t high = 32768; // Max reasonable batch size
+    size_t best_batch = 1;
+    double best_latency = 0;
+
+    std::mt19937_64 rng(1337);
+
+    while (low <= high) {
+        size_t mid = low + (high - low) / 2;
+        
+        std::vector<ORam::BatchOperation> batch;
+        for (size_t i = 0; i < mid; ++i) {
+            ORam::BatchOperation op;
+            if (work_type == 0) op.type = ORam::OpType::Insert;
+            else if (work_type == 1) op.type = ORam::OpType::Search;
+            else if (work_type == 2) op.type = ORam::OpType::Delete;
+            else { 
+                if (i % 3 == 0) op.type = ORam::OpType::Insert;
+                else if (i % 3 == 1) op.type = ORam::OpType::Search;
+                else op.type = ORam::OpType::Delete;
+            }
+            
+            op.key = (rng() % oram->Capacity()) + 1; 
+            if (op.type == ORam::OpType::Insert) {
+                op.val = std::make_unique<uint8_t[]>(256);
+            }
+            batch.push_back(std::move(op));
+        }
+
+        auto start = std::chrono::high_resolution_clock::now();
+        oram->ExecuteBatch(batch, enc_key);
+        auto end = std::chrono::high_resolution_clock::now();
+        double ms = std::chrono::duration<double, std::milli>(end - start).count();
+
+        if (ms <= target_sla_ms) {
+            best_batch = mid;
+            best_latency = ms;
+            low = mid + 1; // Try larger batch
+        } else {
+            high = mid - 1; // SLA exceeded, reduce batch
+        }
+    }
+
+    double throughput = (best_batch / best_latency) * 1000.0;
+    return {best_batch, best_latency, throughput};
+}
+
+int main(int argc, char **argv) {
+    double target_sla_ms = 1000.0; // Default 1 second SLA
+    if (argc > 1) {
+        target_sla_ms = std::stod(argv[1]);
+    }
+    
+    std::cout << "Starting throughput benchmark with SLA = " << target_sla_ms << " ms\n";
+    std::cout << "CSV FORMAT: Workload,MaxBatchSize,LatencyMs,ThroughputOpsSec\n";
+    
+    auto enc_key = GenerateKey();
+    
+    size_t capacity_po2 = 18; // 2^18 = 262,144 blocks
+    auto oram = std::make_unique<ORam>(capacity_po2, 256); 
+    
+    // Fill the ORAM to 50% capacity so we don't trigger resizes easily
+    std::cout << "Initializing ORAM to 50% capacity...\n";
+    size_t target_size = (1ULL << capacity_po2) / 2;
+    std::vector<ORam::BatchOperation> init_batch;
+    for (size_t i = 1; i <= target_size; ++i) {
+        ORam::BatchOperation op;
+        op.type = ORam::OpType::Insert;
+        op.key = i;
+        op.val = std::make_unique<uint8_t[]>(256);
+        init_batch.push_back(std::move(op));
+        
+        if (init_batch.size() >= 16384 || i == target_size) {
+            oram->ExecuteBatch(init_batch, enc_key);
+            init_batch.clear();
+        }
+    }
+    std::cout << "Initialization complete. Running tests...\n";
+
+    // 1. 100% Searches (Does not change size)
+    auto res_search = MeasureThroughput(oram.get(), enc_key, 1, target_sla_ms);
+    std::cout << "100% Search," << res_search.batch_size << "," << res_search.latency_ms << "," << res_search.throughput_ops_sec << "\n";
+
+    // 2. Mixed (34% Insert, 33% Search, 33% Delete) (Net change ~0)
+    auto res_mixed = MeasureThroughput(oram.get(), enc_key, 3, target_sla_ms);
+    std::cout << "Mixed (I/S/D)," << res_mixed.batch_size << "," << res_mixed.latency_ms << "," << res_mixed.throughput_ops_sec << "\n";
+
+    // 3. 100% Deletes (Shrinks tree)
+    auto res_delete = MeasureThroughput(oram.get(), enc_key, 2, target_sla_ms);
+    std::cout << "100% Delete," << res_delete.batch_size << "," << res_delete.latency_ms << "," << res_delete.throughput_ops_sec << "\n";
+
+    // 4. 100% Inserts (Grows tree, done last)
+    auto res_insert = MeasureThroughput(oram.get(), enc_key, 0, target_sla_ms);
+    std::cout << "100% Insert," << res_insert.batch_size << "," << res_insert.latency_ms << "," << res_insert.throughput_ops_sec << "\n";
+
+    return 0;
+}

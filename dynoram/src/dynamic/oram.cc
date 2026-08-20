@@ -196,57 +196,138 @@ uint64_t ORam::SubORamsMemoryBytesMovedTotalSum() {
 }
 
 void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key) {
-  // Phase 1: Batch Preprocessing (Collapsed)
-  std::map<Key, BatchOperation> collapsed;
+  size_t B = batch.size();
+  if (B == 0) return;
+
+  size_t original_inserts = 0;
+  size_t original_reads = 0;
+  size_t original_deletes = 0;
   for (auto& op : batch) {
-    if (op.type == OpType::Delete) {
-      collapsed.erase(op.key); 
-    } else {
-      collapsed[op.key] = std::move(op);
+    if (op.type == OpType::Insert) original_inserts++;
+    else if (op.type == OpType::Delete) original_deletes++;
+    else original_reads++;
+  }
+
+  // Pre-allocate values so we can obliviously swap them in constant time
+  for (auto& op : batch) {
+    if (!op.val && val_len_ > 0) {
+      op.val = std::make_unique<uint8_t[]>(val_len_);
     }
   }
 
-  // Phase 2: Concurrent Client Execution
-  size_t I = 0, DS = 0, DL = 0;
+  struct OblivElem {
+    Key key;
+    uint32_t seq;
+    bool is_dummy;
+    uint8_t op_type; // 0=Insert, 1=Search, 2=Delete
+  };
+
+  std::vector<OblivElem> elems(B);
+  for (size_t i = 0; i < B; ++i) {
+    elems[i].key = batch[i].key;
+    elems[i].seq = static_cast<uint32_t>(i);
+    elems[i].is_dummy = false;
+    if (batch[i].type == OpType::Insert) elems[i].op_type = 0;
+    else if (batch[i].type == OpType::Search) elems[i].op_type = 1;
+    else elems[i].op_type = 2;
+  }
+
+  struct BatchSwapHook {
+    std::vector<BatchOperation>& batch_ref;
+    size_t val_len;
+    OblivElem* elems_base;
+
+    void operator()(OblivElem* a, OblivElem* b, bool cond) const {
+      size_t idx_a = static_cast<size_t>(a - elems_base);
+      size_t idx_b = static_cast<size_t>(b - elems_base);
+
+      sn::obliv::ct_swap(&batch_ref[idx_a].type, &batch_ref[idx_b].type, cond);
+      sn::obliv::ct_swap(&batch_ref[idx_a].key, &batch_ref[idx_b].key, cond);
+      sn::obliv::ct_swap(&batch_ref[idx_a].result.meta_, &batch_ref[idx_b].result.meta_, cond);
+      if (val_len > 0) {
+        sn::obliv::ct_swap_array(batch_ref[idx_a].val.get(), batch_ref[idx_b].val.get(), val_len, cond);
+      }
+    }
+  };
+
+  BatchSwapHook hook{batch, val_len_, elems.data()};
+  auto key_ext = [](const OblivElem& e) { return e; };
+
+  // Phase 1: O-Sort (Group by Key, then Seq)
+  auto comp1 = [](const OblivElem& a, const OblivElem& b) {
+    bool key_eq = sn::obliv::ct_eq(a.key, b.key);
+    bool key_lt = sn::obliv::ct_lt(a.key, b.key);
+    bool seq_lt = sn::obliv::ct_lt(a.seq, b.seq);
+    return sn::obliv::ct_select(seq_lt, key_lt, key_eq);
+  };
+  sn::sortshuffle::ser::detail::bitonic_sort_impl(elems.data(), B, key_ext, comp1, hook);
+
+  // Phase 2: O-Scan (Collapse)
+  for (size_t i = 0; i < B - 1; ++i) {
+    bool same_key = sn::obliv::ct_eq(elems[i].key, elems[i+1].key);
+    sn::obliv::ct_set_ref(elems[i].is_dummy, true, same_key);
+  }
+  for (size_t i = 0; i < B; ++i) {
+    bool is_delete = sn::obliv::ct_eq(elems[i].op_type, static_cast<uint8_t>(2));
+    sn::obliv::ct_set_ref(elems[i].is_dummy, true, is_delete);
+  }
+
+  // Phase 3: O-Sort (Group by OpType, then Dummy)
+  auto comp2 = [](const OblivElem& a, const OblivElem& b) {
+    bool type_eq = sn::obliv::ct_eq(a.op_type, b.op_type);
+    bool type_lt = sn::obliv::ct_lt(a.op_type, b.op_type);
+    bool dummy_lt = (!a.is_dummy) && b.is_dummy;
+    bool dummy_eq = sn::obliv::ct_eq(a.is_dummy, b.is_dummy);
+    return sn::obliv::ct_select(dummy_lt, type_lt, type_eq);
+  };
+  sn::sortshuffle::ser::detail::bitonic_sort_impl(elems.data(), B, key_ext, comp2, hook);
+
+  // Calculate Real Net Growth Obliviously
+  size_t real_I = 0, real_DS = 0, real_DL = 0;
+  for (size_t i = 0; i < B; ++i) {
+    bool is_real = !elems[i].is_dummy;
+    bool is_insert = sn::obliv::ct_eq(elems[i].op_type, static_cast<uint8_t>(0));
+    bool is_delete = sn::obliv::ct_eq(elems[i].op_type, static_cast<uint8_t>(2));
+    uint8_t idx = SubOramIndex(elems[i].key);
+    
+    real_I += sn::obliv::ct_select<size_t>(1, 0, is_real && is_insert);
+    real_DS += sn::obliv::ct_select<size_t>(1, 0, is_real && is_delete && (idx == 0));
+    real_DL += sn::obliv::ct_select<size_t>(1, 0, is_real && is_delete && (idx == 1));
+  }
+
+  // Dispatch exactly to Public Bounds
   std::vector<Block> inserts;
   std::vector<std::pair<Key, bool>> small_reads, large_reads;
 
-  for (auto& [k, op] : collapsed) {
-    if (op.type == OpType::Insert) {
-      ++I;
-      Block b;
-      b.key_ = k;
-      if (op.val) {
-        b.val_ = std::make_unique<uint8_t[]>(val_len_);
-        std::copy(op.val.get(), op.val.get() + val_len_, b.val_.get());
-      }
-      inserts.push_back(std::move(b));
-    } else {
-      uint8_t idx = SubOramIndex(k);
-      
-      small_reads.push_back({k, idx == 0});
-      large_reads.push_back({k, idx == 1});
-
-      if (op.type == OpType::Delete) {
-        if (idx == 0) DS++; 
-        else DL++;
-      }
+  for (size_t i = 0; i < original_inserts; ++i) {
+    Block b;
+    b.key_ = batch[i].key;
+    if (batch[i].val) {
+      b.val_ = std::make_unique<uint8_t[]>(val_len_);
+      std::copy(batch[i].val.get(), batch[i].val.get() + val_len_, b.val_.get());
     }
+    inserts.push_back(std::move(b));
   }
 
-  // Dispatch reads/deletes concurrently to BOTH tiers to hide location
+  for (size_t i = original_inserts; i < B; ++i) {
+    Key k = batch[i].key;
+    bool is_real = !elems[i].is_dummy;
+    uint8_t idx = SubOramIndex(k);
+    small_reads.push_back({k, is_real && (idx == 0)});
+    large_reads.push_back({k, is_real && (idx == 1)});
+  }
+
   if (sub_orams_[0]) sub_orams_[0]->ReadBatch(small_reads, enc_key);
   if (sub_orams_[1]) sub_orams_[1]->ReadBatch(large_reads, enc_key);
 
-  // Directly append inserts to Slarge
   if (sub_orams_[1]) {
     std::vector<static_path_oram::Block> sn_inserts;
     for (auto& b : inserts) sn_inserts.push_back(static_path_oram::Block(0, b.key_));
     sub_orams_[1]->InsertBatch(sn_inserts, enc_key);
   }
 
-  // Phase 3: Oblivious Net Growth & Boundary Checking
-  int64_t a = I - DS - DL;
+  // Phase 4: Oblivious Net Growth & Boundary Checking
+  int64_t a = real_I - real_DS - real_DL;
   int64_t x = sub_orams_[0] ? sub_orams_[0]->Capacity() : 0;
   int64_t y = sub_orams_[1] ? sub_orams_[1]->Capacity() : 0;
 
