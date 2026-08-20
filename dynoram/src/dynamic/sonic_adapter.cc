@@ -624,7 +624,7 @@ void SonicORamAdapter::InsertBatch(std::vector<static_path_oram::Block>& blocks,
               impl_->client->insert(new_block);
               
               insert_count++;
-              if (insert_count % 128 == 0) {
+              if (insert_count % 16 == 0) {
                   sn::oram::access_request req;
                   req.address = capacity_;
                   req.cur_leaf = impl_->GenerateLeaf();
@@ -638,7 +638,7 @@ void SonicORamAdapter::InsertBatch(std::vector<static_path_oram::Block>& blocks,
           }
       }
 
-      if (insert_count % 128 != 0) {
+      if (insert_count % 16 != 0) {
           impl_->client->flush_epoch();
       }
   } catch (const std::exception& e) {

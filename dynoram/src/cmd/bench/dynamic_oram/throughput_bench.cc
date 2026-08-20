@@ -97,8 +97,17 @@ int main(int argc, char **argv) {
         init_batch.push_back(std::move(op));
         
         if (init_batch.size() >= 16384 || i == target_size) {
-            oram->ExecuteBatch(init_batch, enc_key);
+            try {
+                oram->ExecuteBatch(init_batch, enc_key);
+            } catch (const std::exception& e) {
+                std::cerr << "[CRITICAL ERROR] Exception during ORAM initialization (batch execution): " << e.what() << std::endl;
+                throw;
+            } catch (...) {
+                std::cerr << "[CRITICAL ERROR] Unknown exception during ORAM initialization!" << std::endl;
+                throw;
+            }
             init_batch.clear();
+            std::cout << "  ... Executed initialization batch, inserted " << i << " blocks" << std::endl;
         }
     }
     std::cout << "Initialization complete. Running tests...\n";
