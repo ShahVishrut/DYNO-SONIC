@@ -6,9 +6,12 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <future>
+#include <algorithm>
 
 #include "src/utils/crypto.h"
 #include "sonic/obliv/ops/core_ops.hpp"
+#include "sonic/sortshuffle/ser/bitonic.hpp"
 
 namespace dyno::dynamic_stepping_path_oram {
 
@@ -241,9 +244,14 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key)
       size_t idx_a = static_cast<size_t>(a - elems_base);
       size_t idx_b = static_cast<size_t>(b - elems_base);
 
-      sn::obliv::ct_swap(&batch_ref[idx_a].type, &batch_ref[idx_b].type, cond);
+      uint8_t type_a = static_cast<uint8_t>(batch_ref[idx_a].type);
+      uint8_t type_b = static_cast<uint8_t>(batch_ref[idx_b].type);
+      sn::obliv::ct_swap(&type_a, &type_b, cond);
+      batch_ref[idx_a].type = static_cast<OpType>(type_a);
+      batch_ref[idx_b].type = static_cast<OpType>(type_b);
+
       sn::obliv::ct_swap(&batch_ref[idx_a].key, &batch_ref[idx_b].key, cond);
-      sn::obliv::ct_swap(&batch_ref[idx_a].result.meta_, &batch_ref[idx_b].result.meta_, cond);
+      
       if (val_len > 0) {
         sn::obliv::ct_swap_array(batch_ref[idx_a].val.get(), batch_ref[idx_b].val.get(), val_len, cond);
       }
@@ -277,7 +285,6 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key)
     bool type_eq = sn::obliv::ct_eq(a.op_type, b.op_type);
     bool type_lt = sn::obliv::ct_lt(a.op_type, b.op_type);
     bool dummy_lt = (!a.is_dummy) && b.is_dummy;
-    bool dummy_eq = sn::obliv::ct_eq(a.is_dummy, b.is_dummy);
     return sn::obliv::ct_select(dummy_lt, type_lt, type_eq);
   };
   sn::sortshuffle::ser::detail::bitonic_sort_impl(elems.data(), B, key_ext, comp2, hook);
@@ -334,23 +341,23 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key)
   int64_t target_small = x - a;
   int64_t target_large = y + 2*a;
 
-  int64_t k_transfer = a - DS;
+  int64_t k_transfer = a - real_DS;
   bool scale_up = false, scale_down = false;
   int64_t T = 0;
 
   if (target_small <= 0) {
-    k_transfer = x - DS;
+    k_transfer = x - real_DS;
     T = x;
     scale_up = true;
   } else if (target_large <= 0) {
-    k_transfer = -(y - DL + I);
-    int64_t total_deletes = DS + DL;
-    int64_t tightened_limit = std::min(static_cast<int64_t>(I), total_deletes - (y / 2));
+    k_transfer = -(y - real_DL + real_I);
+    int64_t total_deletes = real_DS + real_DL;
+    int64_t tightened_limit = std::min(static_cast<int64_t>(real_I), total_deletes - (y / 2));
     T = y + std::max(static_cast<int64_t>(0), tightened_limit);
     scale_down = true;
   } else {
-    int64_t B = batch.size();
-    T = std::max(std::abs(B - a), std::abs(a));
+    int64_t B_size = static_cast<int64_t>(batch.size());
+    T = std::max(std::abs(B_size - a), std::abs(a));
   }
 
   // Phase 4: Oblivious Buffer Swapping & Transfer (via SONIC Global Stashes)
