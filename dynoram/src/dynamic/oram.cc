@@ -218,7 +218,7 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key)
     }
   }
 
-  struct OblivElem {
+  struct alignas(8) OblivElem {
     Key key;
     uint32_t seq;
     bool is_dummy;
