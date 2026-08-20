@@ -575,9 +575,9 @@ void SonicORamAdapter::InsertBatch(std::vector<static_path_oram::Block>& blocks,
       memory_bytes_moved_total_ += thread_access_ops[i] * kSonicBlockBytes * 2;
   }
 
-  // Sequentially insert into the global stash to prevent std::vector corruption,
-  // flushing every 500 blocks to prevent snapshot capacity overflow.
-  size_t insert_count = 0;
+  // Accumulate new blocks and insert them via chunked insert_pathread_batch
+  // to avoid overflowing the stash snapshot capacity.
+  std::vector<sn::oram::tree::block<kSonicBlockBytes>> stash_chunks;
   for (size_t j = 0; j < B; ++j) {
       uint64_t k = blocks[j].meta_.key_;
       bool real = (!sn::obliv::ct_eq<uint64_t>(k, 0));
@@ -593,16 +593,25 @@ void SonicORamAdapter::InsertBatch(std::vector<static_path_oram::Block>& blocks,
               blocks[j].ToBytes(val_len_, in_buf.data());
           }
           std::copy(in_buf.begin(), in_buf.end(), new_block.data.begin());
-          impl_->client->insert(new_block);
-          
-          insert_count++;
-          if (insert_count % 500 == 0) {
-              impl_->client->flush_epoch();
-          }
+          stash_chunks.push_back(std::move(new_block));
       }
   }
 
-  impl_->client->flush_epoch();
+  if (!stash_chunks.empty()) {
+      auto pre_ops = impl_->client->state_ref().metrics_snapshot().access_ops;
+      
+      size_t max_insert_chunk = 256; 
+      for (size_t i = 0; i < stash_chunks.size(); i += max_insert_chunk) {
+         size_t len = std::min(max_insert_chunk, stash_chunks.size() - i);
+         sn::util::span<const sn::oram::tree::block<kSonicBlockBytes>> chunk_span(stash_chunks.data() + i, len);
+         sn::oram::stash::forestzing::insert_pathread_batch(impl_->client->state_ref().stash(), chunk_span);
+         impl_->client->flush_epoch();
+      }
+      
+      auto post_ops = impl_->client->state_ref().metrics_snapshot().access_ops;
+      memory_access_count_ += (post_ops - pre_ops) + stash_chunks.size();
+      memory_bytes_moved_total_ += ((post_ops - pre_ops) + stash_chunks.size()) * kSonicBlockBytes * 2;
+  }
 }
 
 uint64_t SonicORamAdapter::GenerateRandomLeaf() const {
