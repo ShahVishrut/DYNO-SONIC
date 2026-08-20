@@ -316,48 +316,22 @@ std::vector<static_path_oram::Block> SonicORamAdapter::ReadBatch(const std::vect
 
 void SonicORamAdapter::InsertBatch(const std::vector<static_path_oram::Block>& blocks, crypto::Key enc_key) {
   if (impl_->with_pos_map) {
-    // Dynamic resizing as permitted by threat model
     impl_->pos_map.resize(impl_->pos_map.size() + blocks.size(), 0);
   }
-  
-  std::vector<sn::oram::tree::block<kSonicBlockBytes>> stash_chunks;
-  for (const auto& block : blocks) {
-    uint64_t k = block.meta_.key_;
-    bool is_real = !sn::obliv::ct_eq<uint64_t>(k, 0);
-    
-    uint64_t write_leaf = impl_->GenerateLeaf();
-    if (impl_->with_pos_map) {
-      impl_->pos_map[k] = sn::obliv::ct_select<uint64_t>(write_leaf, impl_->pos_map[k], is_real);
-    }
-    
-    sn::oram::tree::block<kSonicBlockBytes> new_block{};
-    new_block.address = sn::obliv::ct_select<int64_t>(k - 1, -1, is_real);
-    new_block.leaf_ix = write_leaf;
-    
-    std::vector<uint8_t> in_buf(kSonicBlockBytes, 0);
-    size_t block_size = static_path_oram::BlockSize(val_len_);
-    if (block_size <= kSonicBlockBytes) {
-      const_cast<static_path_oram::Block&>(block).ToBytes(val_len_, in_buf.data());
-    }
-    std::copy(in_buf.begin(), in_buf.end(), new_block.data.begin());
-    stash_chunks.push_back(std::move(new_block));
+
+  int num_workers = 16;
+  std::vector<std::thread> workers;
+  for (int i = 0; i < num_workers; ++i) {
+    workers.emplace_back([this, i, num_workers, &blocks, enc_key]() {
+      for (size_t j = i; j < blocks.size(); j += num_workers) {
+        bool is_real = !sn::obliv::ct_eq<uint64_t>(blocks[j].meta_.key_, 0);
+        Insert(blocks[j], enc_key, is_real, false, false);
+      }
+    });
   }
-  
-  if (!stash_chunks.empty()) {
-    auto pre_ops = impl_->client->state_ref().metrics_snapshot().access_ops;
-    
-    size_t max_insert_chunk = 256; 
-    for (size_t i = 0; i < stash_chunks.size(); i += max_insert_chunk) {
-       size_t len = std::min(max_insert_chunk, stash_chunks.size() - i);
-       sn::util::span<const sn::oram::tree::block<kSonicBlockBytes>> chunk_span(stash_chunks.data() + i, len);
-       sn::oram::stash::forestzing::insert_pathread_batch(impl_->client->state_ref().stash(), chunk_span);
-       impl_->client->flush_epoch();
-    }
-    
-    auto post_ops = impl_->client->state_ref().metrics_snapshot().access_ops;
-    memory_access_count_ += (post_ops - pre_ops) + stash_chunks.size();
-    memory_bytes_moved_total_ += ((post_ops - pre_ops) + stash_chunks.size()) * kSonicBlockBytes * 2;
-  }
+  for (auto& w : workers) w.join();
+
+  impl_->client->flush_epoch();
 }
 
 uint64_t SonicORamAdapter::GenerateRandomLeaf() const {
