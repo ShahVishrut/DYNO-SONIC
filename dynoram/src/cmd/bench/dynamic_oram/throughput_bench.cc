@@ -20,7 +20,7 @@ struct BenchmarkResult {
 
 BenchmarkResult MeasureThroughput(
     ORam* oram, 
-    crypto::Key enc_key,
+    Key enc_key,
     int work_type, // 0: Insert, 1: Search, 2: Delete, 3: Mixed
     double target_sla_ms
 ) {
