@@ -314,7 +314,7 @@ std::vector<static_path_oram::Block> SonicORamAdapter::ReadBatch(const std::vect
   return results;
 }
 
-void SonicORamAdapter::InsertBatch(const std::vector<static_path_oram::Block>& blocks, crypto::Key enc_key) {
+void SonicORamAdapter::InsertBatch(std::vector<static_path_oram::Block>& blocks, crypto::Key enc_key) {
   if (impl_->with_pos_map) {
     impl_->pos_map.resize(impl_->pos_map.size() + blocks.size(), 0);
   }
@@ -325,7 +325,7 @@ void SonicORamAdapter::InsertBatch(const std::vector<static_path_oram::Block>& b
     workers.emplace_back([this, i, num_workers, &blocks, enc_key]() {
       for (size_t j = i; j < blocks.size(); j += num_workers) {
         bool is_real = !sn::obliv::ct_eq<uint64_t>(blocks[j].meta_.key_, 0);
-        Insert(blocks[j], enc_key, is_real, false, false);
+        Insert(std::move(blocks[j]), enc_key, is_real, false, false);
       }
     });
   }
