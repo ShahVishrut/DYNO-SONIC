@@ -397,7 +397,15 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key)
     // Pad buffers to T_pow2 with pure dummies
     for (uint64_t i = T; i < T_pow2; ++i) {
         BufferS.emplace_back(true);
+        if (val_len_ > 0) {
+            BufferS.back().val_ = std::make_unique<uint8_t[]>(val_len_);
+            std::fill(BufferS.back().val_.get(), BufferS.back().val_.get() + val_len_, 0);
+        }
         BufferL.emplace_back(true);
+        if (val_len_ > 0) {
+            BufferL.back().val_ = std::make_unique<uint8_t[]>(val_len_);
+            std::fill(BufferL.back().val_.get(), BufferL.back().val_.get() + val_len_, 0);
+        }
     }
 
     // 3. Oblivious Compaction
