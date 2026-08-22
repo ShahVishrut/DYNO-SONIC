@@ -308,60 +308,68 @@ std::vector<static_path_oram::Block> SonicORamAdapter::ReadAndRemoveBatch(const 
       }
   }
 
-  std::vector<std::thread> access_workers;
   std::vector<uint64_t> thread_access_ops(num_workers, 0);
-  for (int i = 0; i < num_workers; ++i) {
-      access_workers.emplace_back([this, i, num_workers, B, &keys_with_real_flags, &batch_cur_leaves, &batch_new_leaves, &results, &thread_access_ops]() {
-          thread_local SonicClient::access_scratch tl_scratch;
-          thread_local size_t tl_scratch_cap = 0;
-          if (tl_scratch_cap != capacity_) {
-              impl_->client->configure_access_scratch(tl_scratch);
-              tl_scratch_cap = capacity_;
-          }
-          uint64_t local_ops = 0;
-          for (size_t j = i; j < B; j += num_workers) {
-              auto& [k, is_real] = keys_with_real_flags[j];
-              sn::oram::access_request req;
-              req.address = sn::obliv::ct_select<uint64_t>(k - 1, capacity_, is_real);
-              req.cur_leaf = batch_cur_leaves[j];
-              req.new_leaf = batch_new_leaves[j];
-              req.is_write = false; 
-              
-              std::vector<uint8_t> in_buf(kSonicBlockBytes, 0);
-              std::vector<uint8_t> out_buf(kSonicBlockBytes, 0);
-              req.in = sn::util::span<uint8_t>(in_buf);
-              req.out = sn::util::span<uint8_t>(out_buf);
-
-              auto pre_ops = impl_->client->state_ref().metrics_snapshot().access_ops;
-              impl_->client->access(req, tl_scratch);
-              auto post_ops = impl_->client->state_ref().metrics_snapshot().access_ops;
-              local_ops += (post_ops - pre_ops);
-
-              static_path_oram::Block res(true);
-              res.val_ = std::make_unique<uint8_t[]>(val_len_);
-              size_t block_size = static_path_oram::BlockSize(val_len_);
-              if (block_size <= kSonicBlockBytes) {
-                  bytes::FromBytes(out_buf.data(), res.meta_);
-                  std::copy(out_buf.data() + sizeof(static_path_oram::BlockMetadata),
-                            out_buf.data() + sizeof(static_path_oram::BlockMetadata) + val_len_,
-                            res.val_.get());
+  size_t chunk_size = 256;
+  for (size_t chunk_start = 0; chunk_start < B; chunk_start += chunk_size) {
+      size_t chunk_end = std::min(B, chunk_start + chunk_size);
+      std::vector<std::thread> access_workers;
+      
+      for (int i = 0; i < num_workers; ++i) {
+          access_workers.emplace_back([this, i, num_workers, chunk_start, chunk_end, &keys_with_real_flags, &batch_cur_leaves, &batch_new_leaves, &results, &thread_access_ops]() {
+              thread_local SonicClient::access_scratch tl_scratch;
+              thread_local size_t tl_scratch_cap = 0;
+              if (tl_scratch_cap != capacity_) {
+                  impl_->client->configure_access_scratch(tl_scratch);
+                  tl_scratch_cap = capacity_;
               }
-              if (!impl_->with_pos_map) {
-                  res.meta_.pos_ = batch_new_leaves[j] + 1;
+              uint64_t local_ops = 0;
+              for (size_t j = chunk_start + i; j < chunk_end; j += num_workers) {
+                  auto& [k, is_real] = keys_with_real_flags[j];
+                  
+                  sn::oram::access_request req;
+                  req.address = sn::obliv::ct_select<uint64_t>(k - 1, capacity_, is_real);
+                  req.cur_leaf = batch_cur_leaves[j];
+                  req.new_leaf = batch_new_leaves[j];
+                  req.is_write = false; 
+                  
+                  std::vector<uint8_t> in_buf(kSonicBlockBytes, 0);
+                  std::vector<uint8_t> out_buf(kSonicBlockBytes, 0);
+                  req.in = sn::util::span<uint8_t>(in_buf);
+                  req.out = sn::util::span<uint8_t>(out_buf);
+
+                  auto pre_ops = impl_->client->state_ref().metrics_snapshot().access_ops;
+                  impl_->client->access(req, tl_scratch);
+                  auto post_ops = impl_->client->state_ref().metrics_snapshot().access_ops;
+                  local_ops += (post_ops - pre_ops);
+
+                  static_path_oram::Block res(true);
+                  res.val_ = std::make_unique<uint8_t[]>(val_len_);
+                  size_t block_size = static_path_oram::BlockSize(val_len_);
+                  if (block_size <= kSonicBlockBytes) {
+                      bytes::FromBytes(out_buf.data(), res.meta_);
+                      std::copy(out_buf.data() + sizeof(static_path_oram::BlockMetadata),
+                                out_buf.data() + sizeof(static_path_oram::BlockMetadata) + val_len_,
+                                res.val_.get());
+                  }
+                  
+                  if (!impl_->with_pos_map) {
+                      res.meta_.pos_ = batch_new_leaves[j] + 1; // Convert back to 1-indexed
+                  }
+                  
+                  results[j] = std::move(res);
               }
-              results[j] = std::move(res);
-          }
-          thread_access_ops[i] = local_ops;
-      });
+              thread_access_ops[i] += local_ops;
+          });
+      }
+      for (auto& w : access_workers) w.join();
+      impl_->client->flush_epoch();
   }
-  for (auto& w : access_workers) w.join();
-  
+
   for (int i = 0; i < num_workers; ++i) {
       memory_access_count_ += thread_access_ops[i];
       memory_bytes_moved_total_ += thread_access_ops[i] * kSonicBlockBytes * 2;
   }
 
-  impl_->client->flush_epoch();
   return results;
 }
 
@@ -527,48 +535,54 @@ void SonicORamAdapter::InsertBatch(std::vector<static_path_oram::Block>& blocks,
       }
   }
 
-  std::vector<std::thread> access_workers;
   std::vector<uint64_t> thread_access_ops(num_workers, 0);
-  for (int i = 0; i < num_workers; ++i) {
-      access_workers.emplace_back([this, i, num_workers, B, &blocks, &batch_cur_leaves, &batch_new_leaves, &batch_is_new, &thread_access_ops]() {
-          thread_local SonicClient::access_scratch tl_scratch;
-          thread_local size_t tl_scratch_cap = 0;
-          if (tl_scratch_cap != capacity_) {
-              impl_->client->configure_access_scratch(tl_scratch);
-              tl_scratch_cap = capacity_;
-          }
-          uint64_t local_ops = 0;
-          for (size_t j = i; j < B; j += num_workers) {
-              uint64_t k = blocks[j].meta_.key_;
-              bool real = (!sn::obliv::ct_eq<uint64_t>(k, 0));
-              
-              if (!batch_is_new[j] || !real) {
-                  sn::oram::access_request req;
-                  req.address = sn::obliv::ct_select<uint64_t>(k - 1, capacity_, real);
-                  req.cur_leaf = batch_cur_leaves[j];
-                  req.new_leaf = batch_new_leaves[j];
-                  req.is_write = sn::obliv::ct_select<bool>(true, false, real);
-                  
-                  std::vector<uint8_t> in_buf(kSonicBlockBytes, 0);
-                  std::vector<uint8_t> out_buf(kSonicBlockBytes, 0);
-                  
-                  size_t block_size = static_path_oram::BlockSize(val_len_);
-                  if (block_size <= kSonicBlockBytes) {
-                      blocks[j].ToBytes(val_len_, in_buf.data());
-                  }
-                  req.in = sn::util::span<uint8_t>(in_buf);
-                  req.out = sn::util::span<uint8_t>(out_buf);
-
-                  auto pre_ops = impl_->client->state_ref().metrics_snapshot().access_ops;
-                  impl_->client->access(req, tl_scratch);
-                  auto post_ops = impl_->client->state_ref().metrics_snapshot().access_ops;
-                  local_ops += (post_ops - pre_ops);
+  size_t chunk_size = 256;
+  for (size_t chunk_start = 0; chunk_start < B; chunk_start += chunk_size) {
+      size_t chunk_end = std::min(B, chunk_start + chunk_size);
+      std::vector<std::thread> access_workers;
+      
+      for (int i = 0; i < num_workers; ++i) {
+          access_workers.emplace_back([this, i, num_workers, chunk_start, chunk_end, &blocks, &batch_cur_leaves, &batch_new_leaves, &batch_is_new, &thread_access_ops]() {
+              thread_local SonicClient::access_scratch tl_scratch;
+              thread_local size_t tl_scratch_cap = 0;
+              if (tl_scratch_cap != capacity_) {
+                  impl_->client->configure_access_scratch(tl_scratch);
+                  tl_scratch_cap = capacity_;
               }
-          }
-          thread_access_ops[i] = local_ops;
-      });
+              uint64_t local_ops = 0;
+              for (size_t j = chunk_start + i; j < chunk_end; j += num_workers) {
+                  uint64_t k = blocks[j].meta_.key_;
+                  bool real = (!sn::obliv::ct_eq<uint64_t>(k, 0));
+                  
+                  if (!batch_is_new[j] || !real) {
+                      sn::oram::access_request req;
+                      req.address = sn::obliv::ct_select<uint64_t>(k - 1, capacity_, real);
+                      req.cur_leaf = batch_cur_leaves[j];
+                      req.new_leaf = batch_new_leaves[j];
+                      req.is_write = sn::obliv::ct_select<bool>(true, false, real);
+                      
+                      std::vector<uint8_t> in_buf(kSonicBlockBytes, 0);
+                      std::vector<uint8_t> out_buf(kSonicBlockBytes, 0);
+                      
+                      size_t block_size = static_path_oram::BlockSize(val_len_);
+                      if (block_size <= kSonicBlockBytes) {
+                          blocks[j].ToBytes(val_len_, in_buf.data());
+                      }
+                      req.in = sn::util::span<uint8_t>(in_buf);
+                      req.out = sn::util::span<uint8_t>(out_buf);
+
+                      auto pre_ops = impl_->client->state_ref().metrics_snapshot().access_ops;
+                      impl_->client->access(req, tl_scratch);
+                      auto post_ops = impl_->client->state_ref().metrics_snapshot().access_ops;
+                      local_ops += (post_ops - pre_ops);
+                  }
+              }
+              thread_access_ops[i] += local_ops;
+          });
+      }
+      for (auto& w : access_workers) w.join();
+      impl_->client->flush_epoch();
   }
-  for (auto& w : access_workers) w.join();
 
   for (int i = 0; i < num_workers; ++i) {
       memory_access_count_ += thread_access_ops[i];
@@ -624,7 +638,7 @@ void SonicORamAdapter::InsertBatch(std::vector<static_path_oram::Block>& blocks,
               impl_->client->insert(new_block);
               
               insert_count++;
-              if (insert_count % 16 == 0) {
+              if (insert_count % 1 == 0) {
                   sn::oram::access_request req;
                   req.address = capacity_;
                   req.cur_leaf = impl_->GenerateLeaf();
