@@ -325,7 +325,9 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key)
 
   for (size_t i = 0; i < original_inserts; ++i) {
     Block b;
-    b.key_ = batch[i].key;
+    bool is_real = !elems[i].is_dummy;
+    b.key_ = sn::obliv::ct_select<uint64_t>(batch[i].key, 0, is_real);
+    
     if (batch[i].val) {
       b.val_ = std::make_unique<uint8_t[]>(val_len_);
       std::copy(batch[i].val.get(), batch[i].val.get() + val_len_, b.val_.get());
