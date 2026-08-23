@@ -108,8 +108,7 @@ struct SonicORamAdapter::Impl {
     opts.routing_depth = 4; // 16 parallel subtrees
     opts.evict_batch = 16; 
     opts.access_concurrency = 16;
-    opts.disjoint_epoch_window = 512; // Reverted back to 512 to prevent flush_epoch delays
-
+    opts.disjoint_epoch_window = 16; // Optimized to match thread count and prevent massive padding on small batches
 
     client = std::make_unique<SonicClient>(opts, std::move(*eviction_team));
     client->initialize();
@@ -363,7 +362,7 @@ std::vector<static_path_oram::Block> SonicORamAdapter::ReadAndRemoveBatch(const 
   std::call_once(g_pool_init_flag, [](){ g_access_pool = std::make_unique<ThreadPool>(16); });
 
   std::vector<uint64_t> thread_access_ops(num_workers, 0);
-  size_t chunk_size = 512;
+  size_t chunk_size = 16;
   std::mutex ops_mutex;
   std::condition_variable chunk_cv;
 
@@ -496,7 +495,7 @@ std::vector<static_path_oram::Block> SonicORamAdapter::ReadBatch(const std::vect
   std::call_once(g_pool_init_flag, [](){ g_access_pool = std::make_unique<ThreadPool>(16); });
 
   std::vector<uint64_t> thread_access_ops(num_workers, 0);
-  size_t chunk_size = 512;
+  size_t chunk_size = 16;
   std::mutex ops_mutex;
   std::condition_variable chunk_cv;
 
@@ -621,7 +620,7 @@ void SonicORamAdapter::InsertBatch(std::vector<static_path_oram::Block>& blocks,
   std::call_once(g_pool_init_flag, [](){ g_access_pool = std::make_unique<ThreadPool>(16); });
 
   std::vector<uint64_t> thread_access_ops(num_workers, 0);
-  size_t chunk_size = 512;
+  size_t chunk_size = 16;
   std::mutex ops_mutex;
   std::condition_variable chunk_cv;
 
