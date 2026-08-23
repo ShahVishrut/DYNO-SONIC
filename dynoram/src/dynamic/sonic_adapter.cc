@@ -145,8 +145,9 @@ static_path_oram::Block SonicORamAdapter::ReadAndRemove(static_path_oram::Pos p,
   uint64_t cur_leaf = sn::obliv::ct_select<uint64_t>(p - 1, 0, is_real);
   uint64_t new_leaf = impl_->GenerateLeaf();
   if (impl_->with_pos_map) {
-    uint64_t found_leaf = impl_->pos_map[k];
-    impl_->pos_map[k] = sn::obliv::ct_select<uint64_t>(new_leaf, impl_->pos_map[k], is_real);
+    uint64_t safe_k = sn::obliv::ct_select<uint64_t>(k, 0, k < impl_->pos_map.size());
+    uint64_t found_leaf = impl_->pos_map[safe_k];
+    impl_->pos_map[safe_k] = sn::obliv::ct_select<uint64_t>(new_leaf, impl_->pos_map[safe_k], is_real);
     bool has_leaf = !sn::obliv::ct_eq<uint64_t>(found_leaf, UINT64_MAX);
     cur_leaf = sn::obliv::ct_select<uint64_t>(found_leaf, impl_->GenerateLeaf(), has_leaf);
   }
@@ -196,8 +197,9 @@ static_path_oram::Block SonicORamAdapter::Read(static_path_oram::Pos p, static_p
   uint64_t new_leaf = impl_->GenerateLeaf();
 
   if (impl_->with_pos_map) {
-    uint64_t found_leaf = impl_->pos_map[k];
-    impl_->pos_map[k] = sn::obliv::ct_select<uint64_t>(new_leaf, impl_->pos_map[k], is_real);
+    uint64_t safe_k = sn::obliv::ct_select<uint64_t>(k, 0, k < impl_->pos_map.size());
+    uint64_t found_leaf = impl_->pos_map[safe_k];
+    impl_->pos_map[safe_k] = sn::obliv::ct_select<uint64_t>(new_leaf, impl_->pos_map[safe_k], is_real);
     bool has_leaf = !sn::obliv::ct_eq<uint64_t>(found_leaf, UINT64_MAX);
     cur_leaf = sn::obliv::ct_select<uint64_t>(found_leaf, impl_->GenerateLeaf(), has_leaf);
   }
@@ -251,9 +253,10 @@ void SonicORamAdapter::Insert(static_path_oram::Block block, crypto::Key enc_key
   uint64_t write_leaf = 0;
   if (impl_->with_pos_map) {
     bool has_leaf = false;
+    uint64_t safe_k = sn::obliv::ct_select<uint64_t>(k, 0, k < impl_->pos_map.size());
     write_leaf = impl_->GenerateLeaf();
-    uint64_t found_leaf = impl_->pos_map[k];
-    impl_->pos_map[k] = sn::obliv::ct_select<uint64_t>(write_leaf, impl_->pos_map[k], real);
+    uint64_t found_leaf = impl_->pos_map[safe_k];
+    impl_->pos_map[safe_k] = sn::obliv::ct_select<uint64_t>(write_leaf, impl_->pos_map[safe_k], real);
     has_leaf = !sn::obliv::ct_eq<uint64_t>(found_leaf, UINT64_MAX);
     cur_leaf = sn::obliv::ct_select<uint64_t>(found_leaf, impl_->GenerateLeaf(), has_leaf);
     
