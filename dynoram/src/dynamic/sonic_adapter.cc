@@ -104,9 +104,11 @@ struct SonicORamAdapter::Impl {
     opts.bucket_dummy_size = 7;
     opts.eviction_rate = 2; // Lock base eviction rate to 2
     
-    // Unlock SONIC Batch Parallelism
-    opts.routing_depth = 4; // 16 parallel subtrees
-    opts.evict_batch = 16; 
+    // Configure SONIC Batch Parallelism to yield num_pathreads = 16
+    // num_pathreads = eviction_rate * (2^routing_depth) * evict_batch
+    // 16 = 2 * (2^1) * 4
+    opts.routing_depth = 1; // 2 parallel subtrees
+    opts.evict_batch = 4; 
     opts.access_concurrency = 16;
     opts.disjoint_epoch_window = 16; // Optimized to match thread count and prevent massive padding on small batches
 
