@@ -75,8 +75,6 @@ static std::unique_ptr<ThreadPool> g_access_pool = nullptr;
 static std::once_flag g_pool_init_flag;
 
 
-// Fixed block size of 64 bytes for Sonic compatibility.
-constexpr size_t kSonicBlockBytes = 64;
 using SonicTraits = sn::oram::zingoram::traits<kSonicBlockBytes, sn::oram::zingoram::epoch_mode::disjoint_epoch, sn::oram::zingoram::storage::slab_store>;
 using SonicClient = sn::oram::zingoram::client<SonicTraits>;
 
@@ -290,13 +288,6 @@ void SonicORamAdapter::Insert(static_path_oram::Block block, crypto::Key enc_key
   if (tl_scratch_cap != capacity_) {
       impl_->client->configure_access_scratch(tl_scratch);
       tl_scratch_cap = capacity_;
-  }
-
-  std::vector<uint8_t> in_buf(kSonicBlockBytes, 0);
-  std::vector<uint8_t> out_buf(kSonicBlockBytes, 0);
-  size_t block_size = static_path_oram::BlockSize(val_len_);
-  if (block_size <= kSonicBlockBytes) {
-      block.ToBytes(val_len_, in_buf.data());
   }
 
   auto pre_ops = impl_->client->state_ref().metrics_snapshot().access_ops;
