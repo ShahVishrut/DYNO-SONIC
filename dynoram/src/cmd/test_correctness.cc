@@ -130,10 +130,109 @@ void TestORam() {
     std::cout << "ORam correctness test passed!\n";
 }
 
+void TestORamBatch() {
+    std::cout << "Testing ORam ExecuteBatch (Mixed Workloads & Collapsing)...\n";
+    auto enc_key = GenerateKey();
+    
+    // Start with capacity 2^6 = 64
+    auto oram = std::make_unique<dyno::dynamic_stepping_path_oram::ORam>(6, 8); 
+    
+    // Pre-insert some data so we can test Deletes and Searches
+    std::vector<dyno::dynamic_stepping_path_oram::ORam::BatchOperation> init_batch;
+    for (uint64_t i = 1; i <= 10; ++i) {
+        dyno::dynamic_stepping_path_oram::ORam::BatchOperation op;
+        op.type = dyno::dynamic_stepping_path_oram::ORam::OpType::Insert;
+        op.key = i;
+        op.val = std::make_unique<uint8_t[]>(8);
+        std::memset(op.val.get(), i * 10, 8); // Value is key * 10
+        init_batch.push_back(std::move(op));
+    }
+    oram->ExecuteBatch(init_batch, enc_key);
+    
+    // Test Scenario 1: Mixed Workload (No Overlap)
+    std::vector<dyno::dynamic_stepping_path_oram::ORam::BatchOperation> batch1;
+    {
+        dyno::dynamic_stepping_path_oram::ORam::BatchOperation op1; // Search 5 (should be 50)
+        op1.type = dyno::dynamic_stepping_path_oram::ORam::OpType::Search;
+        op1.key = 5;
+        batch1.push_back(std::move(op1));
+
+        dyno::dynamic_stepping_path_oram::ORam::BatchOperation op2; // Delete 6
+        op2.type = dyno::dynamic_stepping_path_oram::ORam::OpType::Delete;
+        op2.key = 6;
+        batch1.push_back(std::move(op2));
+
+        dyno::dynamic_stepping_path_oram::ORam::BatchOperation op3; // Insert 11
+        op3.type = dyno::dynamic_stepping_path_oram::ORam::OpType::Insert;
+        op3.key = 11;
+        op3.val = std::make_unique<uint8_t[]>(8);
+        std::memset(op3.val.get(), 110, 8);
+        batch1.push_back(std::move(op3));
+    }
+    oram->ExecuteBatch(batch1, enc_key);
+    
+    // Verify results of batch1 in-place (since ExecuteBatch modifies the passed structs)
+    assert(batch1[0].val != nullptr && "Search 5 should return a value!");
+    assert(batch1[0].val.get()[0] == 50 && "Search 5 should return 50!");
+    
+    // Test Scenario 2: Overlapping Keys (Collapse Logic)
+    std::vector<dyno::dynamic_stepping_path_oram::ORam::BatchOperation> batch2;
+    {
+        dyno::dynamic_stepping_path_oram::ORam::BatchOperation op1; // Insert 12
+        op1.type = dyno::dynamic_stepping_path_oram::ORam::OpType::Insert;
+        op1.key = 12;
+        op1.val = std::make_unique<uint8_t[]>(8);
+        std::memset(op1.val.get(), 120, 8);
+        batch2.push_back(std::move(op1));
+
+        dyno::dynamic_stepping_path_oram::ORam::BatchOperation op2; // Search 12 (Immediately after insert, should return 120)
+        op2.type = dyno::dynamic_stepping_path_oram::ORam::OpType::Search;
+        op2.key = 12;
+        batch2.push_back(std::move(op2));
+
+        dyno::dynamic_stepping_path_oram::ORam::BatchOperation op3; // Insert 13
+        op3.type = dyno::dynamic_stepping_path_oram::ORam::OpType::Insert;
+        op3.key = 13;
+        op3.val = std::make_unique<uint8_t[]>(8);
+        std::memset(op3.val.get(), 130, 8);
+        batch2.push_back(std::move(op3));
+
+        dyno::dynamic_stepping_path_oram::ORam::BatchOperation op4; // Delete 13 (Immediately after insert, cancels out)
+        op4.type = dyno::dynamic_stepping_path_oram::ORam::OpType::Delete;
+        op4.key = 13;
+        batch2.push_back(std::move(op4));
+    }
+    oram->ExecuteBatch(batch2, enc_key);
+    
+    // Verify results of batch2
+    assert(batch2[1].val != nullptr && "Search 12 should return a value!");
+    assert(batch2[1].val.get()[0] == 120 && "Search 12 should collapse with Insert 12 and return 120!");
+    
+    // Verify ORAM State post-batches
+    // Key 6 should be deleted
+    auto res6 = oram->Read(6, enc_key);
+    assert(res6.val_ == nullptr || res6.val_.get()[0] == 0 && "Key 6 should have been deleted!");
+    
+    // Key 11 should be inserted
+    auto res11 = oram->Read(11, enc_key);
+    assert(res11.val_ != nullptr && res11.val_.get()[0] == 110 && "Key 11 should be present!");
+    
+    // Key 12 should be inserted
+    auto res12 = oram->Read(12, enc_key);
+    assert(res12.val_ != nullptr && res12.val_.get()[0] == 120 && "Key 12 should be present!");
+
+    // Key 13 should NOT be present (Insert + Delete cancelled out)
+    auto res13 = oram->Read(13, enc_key);
+    assert((res13.val_ == nullptr || res13.val_.get()[0] == 0) && "Key 13 should have been cancelled out!");
+    
+    std::cout << "ORam ExecuteBatch correctness test passed!\n";
+}
+
 int main() {
     TestOMap();
     TestOHeap();
     TestORam();
+    TestORamBatch();
     std::cout << "\n✅ All correctness tests passed successfully!\n";
     return 0;
 }
