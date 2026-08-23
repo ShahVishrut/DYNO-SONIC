@@ -8,6 +8,8 @@
 #include <string>
 #include <future>
 #include <algorithm>
+#include <chrono>
+#include <iostream>
 
 #include "src/utils/crypto.h"
 #include "sonic/obliv/ops/core_ops.hpp"
@@ -197,8 +199,6 @@ uint64_t ORam::SubORamsMemoryBytesMovedTotalSum() {
   }
   return res;
 }
-
-#include <chrono>
 
 void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key) {
   size_t B = batch.size();
