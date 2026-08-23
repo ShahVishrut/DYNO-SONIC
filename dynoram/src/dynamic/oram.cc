@@ -198,9 +198,19 @@ uint64_t ORam::SubORamsMemoryBytesMovedTotalSum() {
   return res;
 }
 
+#include <chrono>
+
 void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key) {
   size_t B = batch.size();
   if (B == 0) return;
+
+  auto t_start = std::chrono::high_resolution_clock::now();
+  auto get_ms = [&t_start]() {
+      auto now = std::chrono::high_resolution_clock::now();
+      double ms = std::chrono::duration<double, std::milli>(now - t_start).count();
+      t_start = now;
+      return ms;
+  };
 
   size_t original_inserts = 0;
   size_t original_reads = 0;
@@ -269,6 +279,8 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key)
     return sn::obliv::ct_select(seq_lt, key_lt, key_eq);
   };
   sn::sortshuffle::ser::bitonic::detail::bitonic_sort_impl(elems.data(), B, key_ext, comp1, hook);
+  
+  if (B == 1) std::cout << "[DEBUG] Phase 1 (Bitonic Sort 1) took " << get_ms() << " ms" << std::endl;
 
   // Phase 2: O-Scan (Collapse)
   for (size_t i = 0; i < B - 1; ++i) {
@@ -311,6 +323,8 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key)
   }
 
   // Phase 3: O-Sort (Group by OpType, then Dummy)
+  if (B == 1) std::cout << "[DEBUG] Phase 2 (O-Scan) took " << get_ms() << " ms" << std::endl;
+
   auto comp2 = [](const OblivElem& a, const OblivElem& b) {
     bool type_eq = sn::obliv::ct_eq(a.op_type, b.op_type);
     bool type_lt = sn::obliv::ct_lt(a.op_type, b.op_type);
@@ -318,6 +332,7 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key)
     return sn::obliv::ct_select(dummy_lt, type_lt, type_eq);
   };
   sn::sortshuffle::ser::bitonic::detail::bitonic_sort_impl(elems.data(), B, key_ext, comp2, hook);
+  if (B == 1) std::cout << "[DEBUG] Phase 3 (Bitonic Sort 2) took " << get_ms() << " ms" << std::endl;
 
   // Dispatch exactly to Public Bounds
   std::vector<Block> inserts;
@@ -346,11 +361,15 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key)
   if (sub_orams_[0]) sub_orams_[0]->ReadBatch(small_reads, enc_key);
   if (sub_orams_[1]) sub_orams_[1]->ReadBatch(large_reads, enc_key);
 
+  if (B == 1) std::cout << "[DEBUG] Phase 3.5 (ReadBatch) took " << get_ms() << " ms" << std::endl;
+
   if (sub_orams_[1]) {
     std::vector<static_path_oram::Block> sn_inserts;
     for (auto& b : inserts) sn_inserts.push_back(static_path_oram::Block(0, b.key_));
     sub_orams_[1]->InsertBatch(sn_inserts, enc_key);
   }
+  
+  if (B == 1) std::cout << "[DEBUG] Phase 3.6 (InsertBatch Original) took " << get_ms() << " ms" << std::endl;
 
   // Phase 4: Oblivious Net Growth & Boundary Checking
   int64_t a = real_I - real_DS - real_DL;
@@ -426,9 +445,13 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key)
     BufferS.erase(BufferS.begin() + T, BufferS.end());
     BufferL.erase(BufferL.begin() + T, BufferL.end());
 
+    if (B == 1) std::cout << "[DEBUG] Phase 4 (ReadAndRemove + OCompact + Swap) took " << get_ms() << " ms" << std::endl;
+
     // 5. Flush to Stashes
     sub_orams_[0]->InsertBatch(BufferS, enc_key);
     sub_orams_[1]->InsertBatch(BufferL, enc_key);
+
+    if (B == 1) std::cout << "[DEBUG] Phase 4.5 (InsertBatch Buffers) took " << get_ms() << " ms" << std::endl;
 
     // 6. Address Translation & SONIC Native Cleanup
     ptr_S_ += std::max(static_cast<int64_t>(0), k_transfer);
@@ -444,6 +467,8 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key)
     sub_orams_[1] = std::move(sub_orams_[0]);
     sub_orams_[0] = std::make_unique<PORam>(capacity_ / 2, val_len_, true);
   }
+  
+  if (B == 1) std::cout << "[DEBUG] Phase 5 (Scaling) took " << get_ms() << " ms" << std::endl;
 }
 
 } // namespace dyno::dynamic_stepping_path_oram
