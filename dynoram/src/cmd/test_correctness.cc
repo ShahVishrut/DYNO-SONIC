@@ -14,8 +14,8 @@ void TestOMap() {
     std::cout << "Testing OMap correctness...\n";
     auto enc_key = GenerateKey();
     
-    // start with capacity 2^1 = 2
-    auto omap = std::make_unique<dyno::dynamic_stepping_path_omap::OMap>(1, 8); 
+    // start with capacity 2^8 = 256 to satisfy SONIC minimum tree height requirements
+    auto omap = std::make_unique<dyno::dynamic_stepping_path_omap::OMap>(8, 8); 
     
     // Insert some keys
     try {
@@ -63,8 +63,8 @@ void TestOHeap() {
     std::cout << "Testing OHeap correctness...\n";
     auto enc_key = GenerateKey();
     
-    // start with capacity 2^1 = 2
-    auto oheap = std::make_unique<dyno::dynamic_stepping_path_oheap::OHeap>(1, 8);
+    // start with capacity 2^8 = 256 to satisfy SONIC minimum tree height requirements
+    auto oheap = std::make_unique<dyno::dynamic_stepping_path_oheap::OHeap>(8, 8);
     
     // Insert out of order
     int keys[] = {15, 3, 9, 12, 1, 7, 5, 2, 8, 4};
@@ -95,8 +95,8 @@ void TestORam() {
     std::cout << "Testing ORam correctness with 1024 incremental inserts...\n";
     auto enc_key = GenerateKey();
     
-    // Start with capacity 2^1 = 2 to avoid base_cap=0
-    auto oram = std::make_unique<dyno::dynamic_stepping_path_oram::ORam>(1, 8); 
+    // Start with capacity 2^8 = 256 to satisfy SONIC minimum tree height requirements
+    auto oram = std::make_unique<dyno::dynamic_stepping_path_oram::ORam>(8, 8); 
     
     // Insert keys incrementally up to 1024
     try {
@@ -134,8 +134,8 @@ void TestORamBatch() {
     std::cout << "Testing ORam ExecuteBatch (Mixed Workloads & Collapsing)...\n";
     auto enc_key = GenerateKey();
     
-    // Start with capacity 2^6 = 64
-    auto oram = std::make_unique<dyno::dynamic_stepping_path_oram::ORam>(6, 8); 
+    // Start with capacity 2^8 = 256
+    auto oram = std::make_unique<dyno::dynamic_stepping_path_oram::ORam>(8, 8); 
     
     // Pre-insert some data so we can test Deletes and Searches
     std::vector<dyno::dynamic_stepping_path_oram::ORam::BatchOperation> init_batch;
