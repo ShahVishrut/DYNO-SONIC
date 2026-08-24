@@ -705,4 +705,44 @@ uint64_t SonicORamAdapter::GenerateRandomLeaf() const {
   return impl_->GenerateLeaf() + 1; // Return 1-indexed leaf for the caller
 }
 
+void SonicORamAdapter::RawSonicBenchmark(int work_type, size_t batch_size) {
+    int num_workers = 16;
+    size_t chunk = batch_size / num_workers;
+    if (chunk == 0) { num_workers = 1; chunk = batch_size; }
+    
+    std::vector<std::thread> threads;
+    
+    for (int i = 0; i < num_workers; ++i) {
+        threads.emplace_back([this, chunk, work_type]() {
+            thread_local SonicClient::access_scratch tl_scratch;
+            impl_->client->configure_access_scratch(tl_scratch);
+            
+            sn::oram::access_request req;
+            req.address = 1; 
+            req.cur_leaf = 1;
+            req.new_leaf = 2;
+            req.is_write = (work_type == 0);
+            
+            std::vector<uint8_t> in_buf(kSonicBlockBytes, 0);
+            std::vector<uint8_t> out_buf(kSonicBlockBytes, 0);
+            req.in = sn::util::span<uint8_t>(in_buf);
+            req.out = sn::util::span<uint8_t>(out_buf);
+            
+            for (size_t j = 0; j < chunk; ++j) {
+                if (work_type == 0) {
+                    sn::oram::tree::block<kSonicBlockBytes> new_block{};
+                    new_block.address = 1;
+                    new_block.leaf_ix = 2;
+                    impl_->client->insert(new_block);
+                } else {
+                    impl_->client->access(req, tl_scratch);
+                }
+            }
+        });
+    }
+    
+    for (auto& t : threads) t.join();
+    impl_->client->flush_epoch();
+}
+
 } // namespace dyno::dynamic_stepping_path_oram

@@ -30,6 +30,8 @@ class SonicORamAdapter {
   std::vector<static_path_oram::Block> ReadAndRemoveBatch(const std::vector<std::pair<static_path_oram::Key, bool>>& keys_with_real_flags, crypto::Key enc_key);
   std::vector<static_path_oram::Block> ReadBatch(const std::vector<std::pair<static_path_oram::Key, bool>>& keys_with_real_flags, crypto::Key enc_key);
   void InsertBatch(std::vector<static_path_oram::Block>& blocks, crypto::Key enc_key);
+  
+  void RawSonicBenchmark(int work_type, size_t batch_size);
 
   [[nodiscard]] uint64_t GenerateRandomLeaf() const;
   
