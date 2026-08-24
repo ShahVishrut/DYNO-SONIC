@@ -523,7 +523,7 @@ std::vector<static_path_oram::Block> SonicORamAdapter::ReadBatch(const std::vect
                   for (size_t j = chunk_start + i; j < chunk_end; j += num_workers) {
                       auto& [k, is_real] = keys_with_real_flags[j];
                       sn::oram::access_request req;
-                      req.address = sn::obliv::ct_select<uint64_t>(k - 1, capacity_, is_real);
+                      req.address = sn::obliv::ct_select<uint64_t>(k - 1, UINT64_MAX, is_real);
                       req.cur_leaf = batch_cur_leaves[j];
                       req.new_leaf = batch_new_leaves[j];
                       req.is_write = false; 
@@ -665,7 +665,7 @@ void SonicORamAdapter::InsertBatch(std::vector<static_path_oram::Block>& blocks,
                           impl_->client->insert(new_block);
                       } else {
                           sn::oram::access_request req;
-                          req.address = sn::obliv::ct_select<uint64_t>(k - 1, capacity_, real);
+                          req.address = sn::obliv::ct_select<uint64_t>(k - 1, UINT64_MAX, real);
                           req.cur_leaf = batch_cur_leaves[j];
                           req.new_leaf = batch_new_leaves[j];
                           req.is_write = sn::obliv::ct_select<bool>(true, false, real);
@@ -721,9 +721,9 @@ void SonicORamAdapter::RawSonicBenchmark(int work_type, size_t batch_size) {
             std::vector<uint8_t> out_buf(kSonicBlockBytes, 0);
             
             for (size_t j = 0; j < chunk; ++j) {
-                uint64_t fake_address = (j + chunk * i) % capacity_; // Uniqueish address
-                uint64_t fake_cur_leaf = (fake_address * 1337) % capacity_ + 1;
-                uint64_t fake_new_leaf = (fake_address * 7331) % capacity_ + 1;
+                uint64_t fake_address = UINT64_MAX; // Use dummy to prevent duplicate-block crashes across benchmark iterations
+                uint64_t fake_cur_leaf = (j * 1337) % capacity_ + 1;
+                uint64_t fake_new_leaf = (j * 7331) % capacity_ + 1;
 
                 if (work_type == 0) {
                     sn::oram::tree::block<kSonicBlockBytes> new_block{};
