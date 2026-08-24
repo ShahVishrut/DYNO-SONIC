@@ -190,25 +190,26 @@ int main(int argc, char **argv) {
     std::cout << "Initialization complete. Running tests...\n";
 
     // 1. 100% Searches (Does not change size)
-    auto res_search = MeasureThroughput(oram.get(), enc_key, 1, target_sla_ms);
-    std::cout << "100% Search," << res_search.batch_size << "," << res_search.latency_ms << "," << res_search.throughput_ops_sec << "\n";
+    std::cout << "\n=============================================\n";
+    std::cout << "Testing CORE SONIC Interface (Raw Throughput - NO Request Preprocessing/Linear Scans)\n";
+    std::cout << "=============================================\n";
+    auto sonic = std::make_unique<SonicORamAdapter>(1ULL << capacity_po2, 256, true);
 
-    // 2. Mixed (34% Insert, 33% Search, 33% Delete) (Net change ~0)
-    auto res_mixed = MeasureThroughput(oram.get(), enc_key, 3, target_sla_ms);
-    std::cout << "Mixed (I/S/D)," << res_mixed.batch_size << "," << res_mixed.latency_ms << "," << res_mixed.throughput_ops_sec << "\n";
+    auto res_core_search = MeasureSonicThroughput(sonic.get(), enc_key, 1, target_sla_ms, true);
+    std::cout << "[CORE] 100% Search," << res_core_search.batch_size << "," << res_core_search.latency_ms << "," << res_core_search.throughput_ops_sec << "\n";
 
-    // 3. 100% Deletes (Shrinks tree)
-    auto res_delete = MeasureThroughput(oram.get(), enc_key, 2, target_sla_ms);
-    std::cout << "100% Delete," << res_delete.batch_size << "," << res_delete.latency_ms << "," << res_delete.throughput_ops_sec << "\n";
+    auto res_core_mixed = MeasureSonicThroughput(sonic.get(), enc_key, 3, target_sla_ms, true);
+    std::cout << "[CORE] Mixed (I/S/D)," << res_core_mixed.batch_size << "," << res_core_mixed.latency_ms << "," << res_core_mixed.throughput_ops_sec << "\n";
 
-    // 4. 100% Inserts (Grows tree, done last)
-    auto res_insert = MeasureThroughput(oram.get(), enc_key, 0, target_sla_ms);
-    std::cout << "100% Insert," << res_insert.batch_size << "," << res_insert.latency_ms << "," << res_insert.throughput_ops_sec << "\n";
+    auto res_core_delete = MeasureSonicThroughput(sonic.get(), enc_key, 2, target_sla_ms, true);
+    std::cout << "[CORE] 100% Delete," << res_core_delete.batch_size << "," << res_core_delete.latency_ms << "," << res_core_delete.throughput_ops_sec << "\n";
+
+    auto res_core_insert = MeasureSonicThroughput(sonic.get(), enc_key, 0, target_sla_ms, true);
+    std::cout << "[CORE] 100% Insert," << res_core_insert.batch_size << "," << res_core_insert.latency_ms << "," << res_core_insert.throughput_ops_sec << "\n";
 
     std::cout << "\n=============================================\n";
     std::cout << "Testing Base SONIC Interface (Raw Throughput - WITH Adapter Linear Scan Overhead)\n";
     std::cout << "=============================================\n";
-    auto sonic = std::make_unique<SonicORamAdapter>(1ULL << capacity_po2, 256, true);
     
     auto res_sonic_search = MeasureSonicThroughput(sonic.get(), enc_key, 1, target_sla_ms);
     std::cout << "[Adapter] 100% Search," << res_sonic_search.batch_size << "," << res_sonic_search.latency_ms << "," << res_sonic_search.throughput_ops_sec << "\n";
@@ -223,20 +224,20 @@ int main(int argc, char **argv) {
     std::cout << "[Adapter] 100% Insert," << res_sonic_insert.batch_size << "," << res_sonic_insert.latency_ms << "," << res_sonic_insert.throughput_ops_sec << "\n";
 
     std::cout << "\n=============================================\n";
-    std::cout << "Testing CORE SONIC Interface (Raw Throughput - NO Request Preprocessing/Linear Scans)\n";
+    std::cout << "Testing DYNO-SONIC Interface (High-Level Throughput)\n";
     std::cout << "=============================================\n";
 
-    auto res_core_search = MeasureSonicThroughput(sonic.get(), enc_key, 1, target_sla_ms, true);
-    std::cout << "[CORE] 100% Search," << res_core_search.batch_size << "," << res_core_search.latency_ms << "," << res_core_search.throughput_ops_sec << "\n";
+    auto res_search = MeasureThroughput(oram.get(), enc_key, 1, target_sla_ms);
+    std::cout << "100% Search," << res_search.batch_size << "," << res_search.latency_ms << "," << res_search.throughput_ops_sec << "\n";
 
-    auto res_core_mixed = MeasureSonicThroughput(sonic.get(), enc_key, 3, target_sla_ms, true);
-    std::cout << "[CORE] Mixed (I/S/D)," << res_core_mixed.batch_size << "," << res_core_mixed.latency_ms << "," << res_core_mixed.throughput_ops_sec << "\n";
+    auto res_mixed = MeasureThroughput(oram.get(), enc_key, 3, target_sla_ms);
+    std::cout << "Mixed (I/S/D)," << res_mixed.batch_size << "," << res_mixed.latency_ms << "," << res_mixed.throughput_ops_sec << "\n";
 
-    auto res_core_delete = MeasureSonicThroughput(sonic.get(), enc_key, 2, target_sla_ms, true);
-    std::cout << "[CORE] 100% Delete," << res_core_delete.batch_size << "," << res_core_delete.latency_ms << "," << res_core_delete.throughput_ops_sec << "\n";
+    auto res_delete = MeasureThroughput(oram.get(), enc_key, 2, target_sla_ms);
+    std::cout << "100% Delete," << res_delete.batch_size << "," << res_delete.latency_ms << "," << res_delete.throughput_ops_sec << "\n";
 
-    auto res_core_insert = MeasureSonicThroughput(sonic.get(), enc_key, 0, target_sla_ms, true);
-    std::cout << "[CORE] 100% Insert," << res_core_insert.batch_size << "," << res_core_insert.latency_ms << "," << res_core_insert.throughput_ops_sec << "\n";
+    auto res_insert = MeasureThroughput(oram.get(), enc_key, 0, target_sla_ms);
+    std::cout << "100% Insert," << res_insert.batch_size << "," << res_insert.latency_ms << "," << res_insert.throughput_ops_sec << "\n";
 
     return 0;
 }

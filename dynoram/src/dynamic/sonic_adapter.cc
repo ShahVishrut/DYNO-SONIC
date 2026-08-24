@@ -707,49 +707,61 @@ uint64_t SonicORamAdapter::GenerateRandomLeaf() const {
 
 void SonicORamAdapter::RawSonicBenchmark(int work_type, size_t batch_size) {
     int num_workers = 16;
-    size_t chunk = batch_size / num_workers;
-    if (chunk == 0) { num_workers = 1; chunk = batch_size; }
+    size_t chunk_size = 16; 
     
-    std::vector<std::thread> threads;
+    std::call_once(g_pool_init_flag, [](){ g_access_pool = std::make_unique<ThreadPool>(16); });
     
-    for (int i = 0; i < num_workers; ++i) {
-        threads.emplace_back([this, i, chunk, work_type]() {
-            thread_local SonicClient::access_scratch tl_scratch;
-            impl_->client->configure_access_scratch(tl_scratch);
-            
-            std::vector<uint8_t> in_buf(kSonicBlockBytes, 0);
-            std::vector<uint8_t> out_buf(kSonicBlockBytes, 0);
-            
-            for (size_t j = 0; j < chunk; ++j) {
-                uint64_t fake_address = (j + chunk * i) % capacity_; 
-                uint64_t fake_cur_leaf = impl_->pos_map[fake_address + 1];
-                uint64_t fake_new_leaf = ((fake_address + 1) * 7331) % capacity_ + 1;
+    std::mutex ops_mutex;
+    std::condition_variable chunk_cv;
 
-                if (fake_cur_leaf == UINT64_MAX) {
-                    // It's a completely new block, use insert()
-                    impl_->pos_map[fake_address + 1] = fake_new_leaf;
-                    sn::oram::tree::block<kSonicBlockBytes> new_block{};
-                    new_block.address = fake_address;
-                    new_block.leaf_ix = fake_new_leaf;
-                    impl_->client->insert(new_block);
-                } else {
-                    // It already exists in the tree, use access()
-                    impl_->pos_map[fake_address + 1] = fake_new_leaf;
-                    sn::oram::access_request req;
-                    req.address = fake_address;
-                    req.cur_leaf = fake_cur_leaf;
-                    req.new_leaf = fake_new_leaf;
-                    req.is_write = (work_type == 0); // write if Insert workload
-                    req.in = sn::util::span<uint8_t>(in_buf);
-                    req.out = sn::util::span<uint8_t>(out_buf);
-                    impl_->client->access(req, tl_scratch);
+    for (size_t chunk_start = 0; chunk_start < batch_size; chunk_start += chunk_size) {
+        size_t chunk_end = std::min(batch_size, chunk_start + chunk_size);
+        int tasks_pending = num_workers;
+        
+        for (int i = 0; i < num_workers; ++i) {
+            g_access_pool->enqueue([this, i, num_workers, chunk_start, chunk_end, work_type, &ops_mutex, &tasks_pending, &chunk_cv]() {
+                thread_local SonicClient::access_scratch tl_scratch;
+                impl_->client->configure_access_scratch(tl_scratch);
+                
+                std::vector<uint8_t> in_buf(kSonicBlockBytes, 0);
+                std::vector<uint8_t> out_buf(kSonicBlockBytes, 0);
+
+                for (size_t j = chunk_start + i; j < chunk_end; j += num_workers) {
+                    uint64_t fake_address = j % capacity_; 
+                    uint64_t fake_cur_leaf = impl_->pos_map[fake_address + 1];
+                    uint64_t fake_new_leaf = ((fake_address + 1) * 7331) % capacity_ + 1;
+
+                    if (fake_cur_leaf == UINT64_MAX) {
+                        impl_->pos_map[fake_address + 1] = fake_new_leaf;
+                        sn::oram::tree::block<kSonicBlockBytes> new_block{};
+                        new_block.address = fake_address;
+                        new_block.leaf_ix = fake_new_leaf;
+                        impl_->client->insert(new_block);
+                    } else {
+                        impl_->pos_map[fake_address + 1] = fake_new_leaf;
+                        sn::oram::access_request req;
+                        req.address = fake_address;
+                        req.cur_leaf = fake_cur_leaf;
+                        req.new_leaf = fake_new_leaf;
+                        req.is_write = (work_type == 0); 
+                        req.in = sn::util::span<uint8_t>(in_buf);
+                        req.out = sn::util::span<uint8_t>(out_buf);
+                        impl_->client->access(req, tl_scratch);
+                    }
                 }
-            }
-        });
+                
+                {
+                    std::unique_lock<std::mutex> lock(ops_mutex);
+                    tasks_pending--;
+                    if (tasks_pending == 0) chunk_cv.notify_one();
+                }
+            });
+        }
+        
+        std::unique_lock<std::mutex> lock(ops_mutex);
+        chunk_cv.wait(lock, [&tasks_pending]{ return tasks_pending == 0; });
+        impl_->client->flush_epoch();
     }
-    
-    for (auto& t : threads) t.join();
-    impl_->client->flush_epoch();
 }
 
 } // namespace dyno::dynamic_stepping_path_oram
