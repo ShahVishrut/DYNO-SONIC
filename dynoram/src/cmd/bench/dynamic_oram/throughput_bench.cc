@@ -36,7 +36,7 @@ BenchmarkResult MeasureSonicThroughput(
     while (low <= high) {
         size_t mid = low + (high - low) / 2;
         
-        std::vector<std::pair<dyno::static_path_oram::Block, bool>> insert_batch;
+        std::vector<dyno::static_path_oram::Block> insert_batch;
         std::vector<std::pair<dyno::static_path_oram::Key, bool>> search_delete_batch;
         
         for (size_t i = 0; i < mid; ++i) {
@@ -52,7 +52,7 @@ BenchmarkResult MeasureSonicThroughput(
                 b.meta_.key_ = key;
                 b.meta_.pos_ = sonic->GenerateRandomLeaf();
                 b.val_ = std::make_unique<uint8_t[]>(256);
-                insert_batch.push_back({std::move(b), true});
+                insert_batch.push_back(std::move(b));
             } else {
                 search_delete_batch.push_back({key, true});
             }
