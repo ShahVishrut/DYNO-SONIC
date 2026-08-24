@@ -713,28 +713,31 @@ void SonicORamAdapter::RawSonicBenchmark(int work_type, size_t batch_size) {
     std::vector<std::thread> threads;
     
     for (int i = 0; i < num_workers; ++i) {
-        threads.emplace_back([this, chunk, work_type]() {
+        threads.emplace_back([this, i, chunk, work_type]() {
             thread_local SonicClient::access_scratch tl_scratch;
             impl_->client->configure_access_scratch(tl_scratch);
             
-            sn::oram::access_request req;
-            req.address = 1; 
-            req.cur_leaf = 1;
-            req.new_leaf = 2;
-            req.is_write = (work_type == 0);
-            
             std::vector<uint8_t> in_buf(kSonicBlockBytes, 0);
             std::vector<uint8_t> out_buf(kSonicBlockBytes, 0);
-            req.in = sn::util::span<uint8_t>(in_buf);
-            req.out = sn::util::span<uint8_t>(out_buf);
             
             for (size_t j = 0; j < chunk; ++j) {
+                uint64_t fake_address = (j + chunk * i) % capacity_; // Uniqueish address
+                uint64_t fake_cur_leaf = (fake_address * 1337) % capacity_ + 1;
+                uint64_t fake_new_leaf = (fake_address * 7331) % capacity_ + 1;
+
                 if (work_type == 0) {
                     sn::oram::tree::block<kSonicBlockBytes> new_block{};
-                    new_block.address = 1;
-                    new_block.leaf_ix = 2;
+                    new_block.address = fake_address;
+                    new_block.leaf_ix = fake_new_leaf;
                     impl_->client->insert(new_block);
                 } else {
+                    sn::oram::access_request req;
+                    req.address = fake_address;
+                    req.cur_leaf = fake_cur_leaf;
+                    req.new_leaf = fake_new_leaf;
+                    req.is_write = false;
+                    req.in = sn::util::span<uint8_t>(in_buf);
+                    req.out = sn::util::span<uint8_t>(out_buf);
                     impl_->client->access(req, tl_scratch);
                 }
             }
