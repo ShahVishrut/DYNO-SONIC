@@ -11,6 +11,7 @@
 
 using namespace dyno::crypto;
 using namespace dyno::dynamic_stepping_path_oram;
+using namespace dyno::static_path_oram;
 
 struct BenchmarkResult {
     size_t batch_size;
