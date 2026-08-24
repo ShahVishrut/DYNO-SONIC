@@ -12,6 +12,13 @@
 using namespace dyno::crypto;
 using namespace dyno::dynamic_stepping_path_oram;
 
+struct BenchmarkResult {
+    size_t batch_size;
+    double latency_ms;
+    double throughput_ops_sec;
+};
+
+
 BenchmarkResult MeasureSonicThroughput(
     SonicORamAdapter* sonic, 
     dyno::crypto::Key enc_key,
@@ -86,11 +93,7 @@ BenchmarkResult MeasureSonicThroughput(
 }
 
 
-struct BenchmarkResult {
-    size_t batch_size;
-    double latency_ms;
-    double throughput_ops_sec;
-};
+
 
 BenchmarkResult MeasureThroughput(
     ORam* oram, 
