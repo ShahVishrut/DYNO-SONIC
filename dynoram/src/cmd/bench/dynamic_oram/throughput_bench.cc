@@ -11,7 +11,6 @@
 
 using namespace dyno::crypto;
 using namespace dyno::dynamic_stepping_path_oram;
-using namespace dyno::static_path_oram;
 
 struct BenchmarkResult {
     size_t batch_size;
@@ -37,8 +36,8 @@ BenchmarkResult MeasureSonicThroughput(
     while (low <= high) {
         size_t mid = low + (high - low) / 2;
         
-        std::vector<std::pair<static_path_oram::Block, bool>> insert_batch;
-        std::vector<std::pair<static_path_oram::Key, bool>> search_delete_batch;
+        std::vector<std::pair<dyno::static_path_oram::Block, bool>> insert_batch;
+        std::vector<std::pair<dyno::static_path_oram::Key, bool>> search_delete_batch;
         
         for (size_t i = 0; i < mid; ++i) {
             int op_type = work_type;
@@ -46,10 +45,10 @@ BenchmarkResult MeasureSonicThroughput(
                 op_type = i % 3;
             }
             
-            static_path_oram::Key key = (rng() % sonic->Capacity()) + 1; 
+            dyno::static_path_oram::Key key = (rng() % sonic->Capacity()) + 1; 
             
             if (op_type == 0) { // Insert
-                static_path_oram::Block b(true);
+                dyno::static_path_oram::Block b(true);
                 b.meta_.key_ = key;
                 b.meta_.pos_ = sonic->GenerateRandomLeaf();
                 b.val_ = std::make_unique<uint8_t[]>(256);
