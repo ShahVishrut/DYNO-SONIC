@@ -721,21 +721,25 @@ void SonicORamAdapter::RawSonicBenchmark(int work_type, size_t batch_size) {
             std::vector<uint8_t> out_buf(kSonicBlockBytes, 0);
             
             for (size_t j = 0; j < chunk; ++j) {
-                uint64_t fake_address = UINT64_MAX; // Use dummy to prevent duplicate-block crashes across benchmark iterations
-                uint64_t fake_cur_leaf = (j * 1337) % capacity_ + 1;
-                uint64_t fake_new_leaf = (j * 7331) % capacity_ + 1;
+                uint64_t fake_address = (j + chunk * i) % capacity_; 
+                uint64_t fake_cur_leaf = impl_->pos_map[fake_address + 1];
+                uint64_t fake_new_leaf = ((fake_address + 1) * 7331) % capacity_ + 1;
 
-                if (work_type == 0) {
+                if (fake_cur_leaf == UINT64_MAX) {
+                    // It's a completely new block, use insert()
+                    impl_->pos_map[fake_address + 1] = fake_new_leaf;
                     sn::oram::tree::block<kSonicBlockBytes> new_block{};
                     new_block.address = fake_address;
                     new_block.leaf_ix = fake_new_leaf;
                     impl_->client->insert(new_block);
                 } else {
+                    // It already exists in the tree, use access()
+                    impl_->pos_map[fake_address + 1] = fake_new_leaf;
                     sn::oram::access_request req;
                     req.address = fake_address;
                     req.cur_leaf = fake_cur_leaf;
                     req.new_leaf = fake_new_leaf;
-                    req.is_write = false;
+                    req.is_write = (work_type == 0); // write if Insert workload
                     req.in = sn::util::span<uint8_t>(in_buf);
                     req.out = sn::util::span<uint8_t>(out_buf);
                     impl_->client->access(req, tl_scratch);
