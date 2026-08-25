@@ -27,7 +27,7 @@ BenchmarkResult MeasureSonicThroughput(
     bool raw_sonic_only = false
 ) {
     size_t low = 1;
-    size_t high = 32768; 
+    size_t high = 8388608; 
     size_t best_batch = 1;
     double best_latency = 0;
 
@@ -102,7 +102,7 @@ BenchmarkResult MeasureThroughput(
     double target_sla_ms
 ) {
     size_t low = 1;
-    size_t high = 32768; // Max reasonable batch size
+    size_t high = 8388608; // Increased to 8 million to not artificially cap high throughput
     size_t best_batch = 1;
     double best_latency = 0;
 
