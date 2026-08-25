@@ -104,7 +104,7 @@ struct SonicORamAdapter::Impl {
     opts.routing_depth = 3; 
     opts.evict_batch = 2; 
     opts.access_concurrency = 16;
-    opts.disjoint_epoch_window = 16; // Optimized to match thread count and prevent massive padding on small batches
+    opts.disjoint_epoch_window = 32;
 
     client = std::make_unique<SonicClient>(opts, std::move(*eviction_team));
     client->initialize();
@@ -703,7 +703,7 @@ uint64_t SonicORamAdapter::GenerateRandomLeaf() const {
 
 double SonicORamAdapter::RawSonicBenchmark(int work_type, size_t batch_size) {
     int num_workers = 16;
-    size_t chunk_size = 16; 
+    size_t chunk_size = 32; 
     
     std::call_once(g_pool_init_flag, [](){ g_access_pool = std::make_unique<ThreadPool>(16); });
     
