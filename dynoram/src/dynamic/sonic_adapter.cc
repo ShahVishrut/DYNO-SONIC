@@ -726,7 +726,7 @@ double SonicORamAdapter::RawSonicBenchmark(int work_type, size_t batch_size) {
                 std::vector<uint8_t> in_buf(kSonicBlockBytes, 0);
                 std::vector<uint8_t> out_buf(kSonicBlockBytes, 0);
 
-                uint64_t num_leaves = impl_->client->topology().num_leaves;
+                uint64_t num_leaves = 1ULL << impl_->client->shape().height;
 
                 for (size_t j = chunk_start + i; j < chunk_end; j += num_workers) {
                     uint64_t fake_address = j % capacity_; 
