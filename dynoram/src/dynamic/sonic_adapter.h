@@ -12,7 +12,7 @@
 namespace dyno::dynamic_stepping_path_oram {
 
 // OMap requires at least 56 bytes for BlockMetadata + Val. OHeap requires at least 81 bytes. We use 128 bytes to be safe and power-of-two.
-constexpr size_t kSonicBlockBytes = 128;
+constexpr size_t kSonicBlockBytes = 64;
 
 class SonicORamAdapter {
  public:
@@ -31,7 +31,7 @@ class SonicORamAdapter {
   std::vector<static_path_oram::Block> ReadBatch(const std::vector<std::pair<static_path_oram::Key, bool>>& keys_with_real_flags, crypto::Key enc_key);
   void InsertBatch(std::vector<static_path_oram::Block>& blocks, crypto::Key enc_key);
   
-  void RawSonicBenchmark(int work_type, size_t batch_size);
+  double RawSonicBenchmark(int work_type, size_t batch_size);
 
   [[nodiscard]] uint64_t GenerateRandomLeaf() const;
   

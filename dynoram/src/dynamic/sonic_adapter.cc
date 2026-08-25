@@ -98,15 +98,11 @@ struct SonicORamAdapter::Impl {
 
     SonicTraits::options_t opts{};
     opts.block_count = capacity + 1;
-    opts.bucket_real_size = 5;
-    opts.bucket_dummy_size = 7;
-    opts.eviction_rate = 2; // Lock base eviction rate to 2
-    
-    // Configure SONIC Batch Parallelism to yield num_pathreads = 16
-    // num_pathreads = eviction_rate * (2^routing_depth) * evict_batch
-    // 16 = 2 * (2^1) * 4
-    opts.routing_depth = 1; // 2 parallel subtrees
-    opts.evict_batch = 4; 
+    opts.bucket_real_size = 16;
+    opts.bucket_dummy_size = 16;
+    opts.eviction_rate = 2; 
+    opts.routing_depth = 3; 
+    opts.evict_batch = 2; 
     opts.access_concurrency = 16;
     opts.disjoint_epoch_window = 16; // Optimized to match thread count and prevent massive padding on small batches
 
@@ -705,7 +701,7 @@ uint64_t SonicORamAdapter::GenerateRandomLeaf() const {
   return impl_->GenerateLeaf() + 1; // Return 1-indexed leaf for the caller
 }
 
-void SonicORamAdapter::RawSonicBenchmark(int work_type, size_t batch_size) {
+double SonicORamAdapter::RawSonicBenchmark(int work_type, size_t batch_size) {
     int num_workers = 16;
     size_t chunk_size = 16; 
     
@@ -714,10 +710,14 @@ void SonicORamAdapter::RawSonicBenchmark(int work_type, size_t batch_size) {
     std::mutex ops_mutex;
     std::condition_variable chunk_cv;
 
+    double total_ms = 0;
+
     for (size_t chunk_start = 0; chunk_start < batch_size; chunk_start += chunk_size) {
         size_t chunk_end = std::min(batch_size, chunk_start + chunk_size);
         int tasks_pending = num_workers;
         
+        auto start_time = std::chrono::high_resolution_clock::now();
+
         for (int i = 0; i < num_workers; ++i) {
             g_access_pool->enqueue([this, i, num_workers, chunk_start, chunk_end, work_type, &ops_mutex, &tasks_pending, &chunk_cv]() {
                 thread_local SonicClient::access_scratch tl_scratch;
@@ -760,8 +760,14 @@ void SonicORamAdapter::RawSonicBenchmark(int work_type, size_t batch_size) {
         
         std::unique_lock<std::mutex> lock(ops_mutex);
         chunk_cv.wait(lock, [&tasks_pending]{ return tasks_pending == 0; });
+        
+        auto end_time = std::chrono::high_resolution_clock::now();
+        total_ms += std::chrono::duration<double, std::milli>(end_time - start_time).count();
+
         impl_->client->flush_epoch();
     }
+
+    return total_ms;
 }
 
 } // namespace dyno::dynamic_stepping_path_oram
