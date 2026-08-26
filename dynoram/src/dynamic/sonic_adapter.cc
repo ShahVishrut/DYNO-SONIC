@@ -731,7 +731,7 @@ double SonicORamAdapter::RawSonicBenchmark(int work_type, size_t batch_size) {
                 for (size_t j = chunk_start + i; j < chunk_end; j += num_workers) {
                     uint64_t fake_address = j % capacity_; 
                     uint64_t fake_cur_leaf = impl_->pos_map[fake_address + 1];
-                    uint64_t fake_new_leaf = ((fake_address + 1) * 7331) % num_leaves + 1;
+                    uint64_t fake_new_leaf = ((fake_address + 1) * 7331) % num_leaves;
 
                     if (fake_cur_leaf == UINT64_MAX) {
                         impl_->pos_map[fake_address + 1] = fake_new_leaf;
