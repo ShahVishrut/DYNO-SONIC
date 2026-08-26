@@ -35,6 +35,7 @@ BenchmarkResult MeasureSonicThroughput(
 
     while (low <= high) {
         size_t mid = low + (high - low) / 2;
+        std::cout << "    ... Testing batch size: " << mid << std::flush;
         
         std::vector<dyno::static_path_oram::Block> insert_batch;
         std::vector<std::pair<dyno::static_path_oram::Key, bool>> search_delete_batch;
@@ -78,6 +79,8 @@ BenchmarkResult MeasureSonicThroughput(
             auto end = std::chrono::high_resolution_clock::now();
             ms = std::chrono::duration<double, std::milli>(end - start).count();
         }
+        
+        std::cout << " -> " << ms << " ms\n";
 
         if (ms <= target_sla_ms) {
             best_batch = mid;
@@ -110,6 +113,7 @@ BenchmarkResult MeasureThroughput(
 
     while (low <= high) {
         size_t mid = low + (high - low) / 2;
+        std::cout << "    ... Testing batch size: " << mid << std::flush;
         
         std::vector<ORam::BatchOperation> batch;
         for (size_t i = 0; i < mid; ++i) {
@@ -134,6 +138,7 @@ BenchmarkResult MeasureThroughput(
         oram->ExecuteBatch(batch, enc_key);
         auto end = std::chrono::high_resolution_clock::now();
         double ms = std::chrono::duration<double, std::milli>(end - start).count();
+        std::cout << " -> " << ms << " ms\n";
 
         if (ms <= target_sla_ms) {
             best_batch = mid;
