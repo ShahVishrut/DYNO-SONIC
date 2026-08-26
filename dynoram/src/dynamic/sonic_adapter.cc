@@ -777,4 +777,95 @@ double SonicORamAdapter::RawSonicBenchmark(int work_type, size_t batch_size) {
     return total_ms;
 }
 
+}
+
+double SonicORamAdapter::SpinlockSonicBenchmark(int work_type, size_t batch_size) {
+    int num_workers = 16;
+    size_t chunk_size = 32;
+    
+    if (batch_size % chunk_size != 0) {
+        batch_size = ((batch_size / chunk_size) + 1) * chunk_size;
+    }
+
+    double total_ms = 0;
+    
+    // We use a barrier for num_workers + 1 (the main thread orchestrates)
+    sn::threads::barrier sync_point(num_workers + 1);
+
+    std::vector<std::thread> workers;
+    for (int i = 0; i < num_workers; ++i) {
+        workers.emplace_back([this, i, num_workers, chunk_size, batch_size, work_type, &sync_point]() {
+            thread_local SonicClient::access_scratch tl_scratch;
+            impl_->client->configure_access_scratch(tl_scratch);
+            
+            std::vector<uint8_t> in_buf(kSonicBlockBytes, 0);
+            std::vector<uint8_t> out_buf(kSonicBlockBytes, 0);
+
+            uint64_t num_leaves = 1ULL << impl_->client->shape().height;
+
+            for (size_t chunk_start = 0; chunk_start < batch_size; chunk_start += chunk_size) {
+                size_t chunk_end = std::min(batch_size, chunk_start + chunk_size);
+                
+                // Wait for main thread to signal start of this chunk's timer
+                sync_point.arrive_and_wait();
+
+                for (size_t j = chunk_start + i; j < chunk_end; j += num_workers) {
+                    uint64_t fake_address = j % capacity_; 
+                    uint64_t fake_cur_leaf = impl_->pos_map[fake_address + 1];
+                    uint64_t fake_new_leaf = ((fake_address + 1) * 7331) % num_leaves;
+
+                    if (fake_cur_leaf == UINT64_MAX) {
+                        impl_->pos_map[fake_address + 1] = fake_new_leaf;
+                        sn::oram::tree::block<kSonicBlockBytes> new_block{};
+                        new_block.address = fake_address;
+                        new_block.leaf_ix = fake_new_leaf;
+                        impl_->client->insert(new_block);
+                    } else {
+                        impl_->pos_map[fake_address + 1] = fake_new_leaf;
+                        sn::oram::access_request req;
+                        req.address = fake_address;
+                        req.cur_leaf = fake_cur_leaf;
+                        req.new_leaf = fake_new_leaf;
+                        req.is_write = false;
+                        req.in = sn::util::span<uint8_t>(in_buf);
+                        req.out = sn::util::span<uint8_t>(out_buf);
+                        impl_->client->access(req, tl_scratch);
+                    }
+                }
+                
+                // Signal main thread we are done with accesses
+                sync_point.arrive_and_wait();
+                
+                // Wait for main thread to finish flush_epoch
+                sync_point.arrive_and_wait();
+            }
+        });
+    }
+
+    for (size_t chunk_start = 0; chunk_start < batch_size; chunk_start += chunk_size) {
+        auto start_time = std::chrono::high_resolution_clock::now();
+        
+        // Release workers to start accesses
+        sync_point.arrive_and_wait();
+        
+        // Wait for workers to finish accesses
+        sync_point.arrive_and_wait();
+        
+        auto end_time = std::chrono::high_resolution_clock::now();
+        total_ms += std::chrono::duration<double, std::milli>(end_time - start_time).count();
+
+        // Perform evictions while the timer is paused
+        impl_->client->flush_epoch();
+        
+        // Release workers for next chunk
+        sync_point.arrive_and_wait();
+    }
+
+    for (auto& t : workers) {
+        t.join();
+    }
+
+    return total_ms;
+}
+
 } // namespace dyno::dynamic_stepping_path_oram

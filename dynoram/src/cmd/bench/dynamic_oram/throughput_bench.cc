@@ -24,10 +24,13 @@ BenchmarkResult MeasureSonicThroughput(
     dyno::crypto::Key enc_key,
     int work_type, // 0: Insert, 1: Search, 2: Delete, 3: Mixed
     double target_sla_ms,
-    bool raw_sonic_only = false
+    int raw_sonic_mode = 0 // 0: None, 1: Polite, 2: Spinlock
 ) {
     size_t low = 1;
-    size_t high = raw_sonic_only ? 1048576 : 32768; // Lowered to 1M to prevent timeouts
+    size_t high;
+    if (raw_sonic_mode == 2) high = 8388608;
+    else if (raw_sonic_mode == 1) high = 1048576;
+    else high = 32768;
     size_t best_batch = 1;
     double best_latency = 0;
 
@@ -61,20 +64,18 @@ BenchmarkResult MeasureSonicThroughput(
 
         double ms = 0.0;
         
-        if (raw_sonic_only) {
-            // Bypass adapter logic, directly call RawSonicBenchmark
+        auto start = std::chrono::high_resolution_clock::now();
+        
+        if (raw_sonic_mode == 2) {
+            ms = sonic->SpinlockSonicBenchmark(work_type, mid);
+        } else if (raw_sonic_mode == 1) {
             ms = sonic->RawSonicBenchmark(work_type, mid);
         } else {
-            auto start = std::chrono::high_resolution_clock::now();
-            if (work_type == 0) {
-                sonic->InsertBatch(insert_batch, enc_key);
-            } else if (work_type == 1) {
-                sonic->ReadBatch(search_delete_batch, enc_key);
-            } else if (work_type == 2) {
+            if (work_type == 1 || work_type == 2 || work_type == 3) {
                 sonic->ReadAndRemoveBatch(search_delete_batch, enc_key);
-            } else {
-                if (!insert_batch.empty()) sonic->InsertBatch(insert_batch, enc_key);
-                if (!search_delete_batch.empty()) sonic->ReadAndRemoveBatch(search_delete_batch, enc_key);
+            }
+            if (work_type == 0 || work_type == 3) {
+                sonic->InsertBatch(insert_batch, enc_key);
             }
             auto end = std::chrono::high_resolution_clock::now();
             ms = std::chrono::duration<double, std::milli>(end - start).count();
@@ -195,22 +196,23 @@ int main(int argc, char **argv) {
     std::cout << "Initialization complete. Running tests...\n";
 
     // 1. 100% Searches (Does not change size)
-    std::cout << "\n=============================================\n";
-    std::cout << "Testing PAPER-ONLINE SONIC Interface (Raw Throughput - NO Evictions, Deferred offline)\n";
     std::cout << "=============================================\n";
-    auto sonic = std::make_unique<SonicORamAdapter>(1ULL << capacity_po2, 256, true);
+    std::cout << "Testing PAPER-ONLINE SONIC Interface (Raw Throughput - NO Evictions, Deferred offline, SPINLOCK MODE)\n";
+    std::cout << "=============================================\n";
+    auto res_core_search_spin = MeasureSonicThroughput(sonic.get(), enc_key, 1, target_sla_ms, 2);
+    std::cout << "[PAPER-ONLINE SPINLOCK] 100% Search," << res_core_search_spin.batch_size << "," << res_core_search_spin.latency_ms << "," << res_core_search_spin.throughput_ops_sec << "\n\n";
 
-    auto res_core_search = MeasureSonicThroughput(sonic.get(), enc_key, 1, target_sla_ms, true);
-    std::cout << "[PAPER-ONLINE] 100% Search," << res_core_search.batch_size << "," << res_core_search.latency_ms << "," << res_core_search.throughput_ops_sec << "\n";
-
-    auto res_core_mixed = MeasureSonicThroughput(sonic.get(), enc_key, 3, target_sla_ms, true);
-    std::cout << "[PAPER-ONLINE] Mixed (I/S/D)," << res_core_mixed.batch_size << "," << res_core_mixed.latency_ms << "," << res_core_mixed.throughput_ops_sec << "\n";
-
-    auto res_core_delete = MeasureSonicThroughput(sonic.get(), enc_key, 2, target_sla_ms, true);
-    std::cout << "[PAPER-ONLINE] 100% Delete," << res_core_delete.batch_size << "," << res_core_delete.latency_ms << "," << res_core_delete.throughput_ops_sec << "\n";
-
-    auto res_core_insert = MeasureSonicThroughput(sonic.get(), enc_key, 0, target_sla_ms, true);
-    std::cout << "[PAPER-ONLINE] 100% Insert," << res_core_insert.batch_size << "," << res_core_insert.latency_ms << "," << res_core_insert.throughput_ops_sec << "\n";
+    std::cout << "=============================================\n";
+    std::cout << "Testing PAPER-ONLINE SONIC Interface (Raw Throughput - NO Evictions, Deferred offline, POLITE MODE)\n";
+    std::cout << "=============================================\n";
+    auto res_core_search = MeasureSonicThroughput(sonic.get(), enc_key, 1, target_sla_ms, 1);
+    std::cout << "[PAPER-ONLINE POLITE] 100% Search," << res_core_search.batch_size << "," << res_core_search.latency_ms << "," << res_core_search.throughput_ops_sec << "\n";
+    auto res_core_mixed = MeasureSonicThroughput(sonic.get(), enc_key, 3, target_sla_ms, 1);
+    std::cout << "[PAPER-ONLINE POLITE] Mixed (I/S/D)," << res_core_mixed.batch_size << "," << res_core_mixed.latency_ms << "," << res_core_mixed.throughput_ops_sec << "\n";
+    auto res_core_delete = MeasureSonicThroughput(sonic.get(), enc_key, 2, target_sla_ms, 1);
+    std::cout << "[PAPER-ONLINE POLITE] 100% Delete," << res_core_delete.batch_size << "," << res_core_delete.latency_ms << "," << res_core_delete.throughput_ops_sec << "\n";
+    auto res_core_insert = MeasureSonicThroughput(sonic.get(), enc_key, 0, target_sla_ms, 1);
+    std::cout << "[PAPER-ONLINE POLITE] 100% Insert," << res_core_insert.batch_size << "," << res_core_insert.latency_ms << "," << res_core_insert.throughput_ops_sec << "\n\n";
 
     std::cout << "\n=============================================\n";
     std::cout << "Testing Base SONIC Interface (Raw Throughput - WITH Adapter Linear Scan Overhead)\n";

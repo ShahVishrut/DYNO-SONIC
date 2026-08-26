@@ -32,6 +32,7 @@ class SonicORamAdapter {
   void InsertBatch(std::vector<static_path_oram::Block>& blocks, crypto::Key enc_key);
   
   double RawSonicBenchmark(int work_type, size_t batch_size);
+  double SpinlockSonicBenchmark(int work_type, size_t batch_size);
 
   [[nodiscard]] uint64_t GenerateRandomLeaf() const;
   
