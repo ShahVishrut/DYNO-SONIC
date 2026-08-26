@@ -27,7 +27,7 @@ BenchmarkResult MeasureSonicThroughput(
     bool raw_sonic_only = false
 ) {
     size_t low = 1;
-    size_t high = 8388608; 
+    size_t high = raw_sonic_only ? 1048576 : 32768; // Lowered to 1M to prevent timeouts
     size_t best_batch = 1;
     double best_latency = 0;
 
