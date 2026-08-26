@@ -777,7 +777,7 @@ double SonicORamAdapter::RawSonicBenchmark(int work_type, size_t batch_size) {
     return total_ms;
 }
 
-}
+
 
 double SonicORamAdapter::SpinlockSonicBenchmark(int work_type, size_t batch_size) {
     int num_workers = 16;
@@ -866,6 +866,8 @@ double SonicORamAdapter::SpinlockSonicBenchmark(int work_type, size_t batch_size
     }
 
     return total_ms;
+}
+
 }
 
 } // namespace dyno::dynamic_stepping_path_oram
