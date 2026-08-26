@@ -710,6 +710,11 @@ double SonicORamAdapter::RawSonicBenchmark(int work_type, size_t batch_size) {
     std::mutex ops_mutex;
     std::condition_variable chunk_cv;
 
+    // Pad batch_size to be a multiple of chunk_size to prevent deadlocks in flush_epoch()
+    if (batch_size % chunk_size != 0) {
+        batch_size = ((batch_size / chunk_size) + 1) * chunk_size;
+    }
+
     double total_ms = 0;
 
     for (size_t chunk_start = 0; chunk_start < batch_size; chunk_start += chunk_size) {
