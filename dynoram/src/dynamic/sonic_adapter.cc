@@ -868,6 +868,4 @@ double SonicORamAdapter::SpinlockSonicBenchmark(int work_type, size_t batch_size
     return total_ms;
 }
 
-}
-
 } // namespace dyno::dynamic_stepping_path_oram
