@@ -199,6 +199,8 @@ int main(int argc, char **argv) {
     std::cout << "=============================================\n";
     std::cout << "Testing PAPER-ONLINE SONIC Interface (Raw Throughput - NO Evictions, Deferred offline, SPINLOCK MODE)\n";
     std::cout << "=============================================\n";
+    auto sonic = std::make_unique<dyno::dynamic_stepping_path_oram::SonicORamAdapter>(1ULL << capacity_po2, 256, true);
+
     auto res_core_search_spin = MeasureSonicThroughput(sonic.get(), enc_key, 1, target_sla_ms, 2);
     std::cout << "[PAPER-ONLINE SPINLOCK] 100% Search," << res_core_search_spin.batch_size << "," << res_core_search_spin.latency_ms << "," << res_core_search_spin.throughput_ops_sec << "\n\n";
 
