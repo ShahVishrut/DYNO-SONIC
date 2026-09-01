@@ -4,11 +4,12 @@
 #include <vector>
 #include <chrono>
 #include <random>
+#include <cstring>
 #include "src/dynamic/oram.h"
 
 using namespace dyno::dynamic_stepping_path_oram;
 
-void RunDynoWorkload(ORam& oram, crypto::Key enc_key, const std::string& test_name, int num_ops, int mix_type, bool steady_state = true) {
+void RunDynoWorkload(ORam& oram, dyno::crypto::Key enc_key, const std::string& test_name, int num_ops, int mix_type, bool steady_state = true) {
     // mix_type: 0=Reads, 1=Updates, 2=Inserts, 3=Deletes, 4=Mixed (30% I, 50% R, 10% U, 10% D)
     
     std::cout << "=============================================\n";
@@ -17,14 +18,14 @@ void RunDynoWorkload(ORam& oram, crypto::Key enc_key, const std::string& test_na
 
     std::mt19937 rng(42);
     size_t cap = oram.Capacity();
-    std::uniform_int_distribution<Key> dist_key(1, cap);
+    std::uniform_int_distribution<uint64_t> dist_key(1, cap);
 
     std::vector<ORam::BatchOperation> batch;
     batch.reserve(num_ops);
 
     for (int i = 0; i < num_ops; ++i) {
         ORam::BatchOperation op;
-        Key k = dist_key(rng);
+        uint64_t k = dist_key(rng);
         
         int type_to_use = mix_type;
         if (mix_type == 4) { // Mixed workload
@@ -66,6 +67,75 @@ void RunDynoWorkload(ORam& oram, crypto::Key enc_key, const std::string& test_na
     std::cout << test_name << "," << num_ops << "," << total_ms << "," << std::fixed << std::setprecision(2) << ops_sec << "\n\n";
 }
 
+void TestDynoContinuousScaling(dyno::crypto::Key enc_key, size_t batch_size) {
+    std::cout << "=============================================\n";
+    std::cout << "TestDynoContinuousScaling (Growth & Shrink Latency Spike Test)\n";
+    std::cout << "=============================================\n";
+
+    // We initialize a new ORAM so we can perfectly control its boundaries.
+    // If batch_size is 131,072, we start ORAM at ~524,288 capacity (power of two).
+    int start_pow2 = 10;
+    while ((1ULL << start_pow2) < batch_size * 4) {
+        start_pow2++;
+    }
+    
+    ORam scaling_oram(start_pow2, 16); 
+    std::mt19937 rng(42);
+    
+    // We will run 16 batches.
+    // First 8 batches: 90% Inserts, 10% Reads (Forces net size to grow rapidly -> triggers scale UP)
+    // Next 8 batches: 90% Deletes, 10% Reads (Forces net size to drop rapidly -> triggers scale DOWN)
+    int num_batches = 16;
+    
+    std::cout << "CSV FORMAT: BatchIndex,WorkloadPhase,ScalingEvent,BatchSize,LatencyMs,NewCapacity\n";
+
+    for (int b = 1; b <= num_batches; ++b) {
+        std::vector<ORam::BatchOperation> batch;
+        batch.reserve(batch_size);
+
+        bool growing_phase = (b <= 8);
+        std::string phase_str = growing_phase ? "GROWING" : "SHRINKING";
+        
+        size_t current_cap = scaling_oram.Capacity();
+        std::uniform_int_distribution<uint64_t> dist_key(1, current_cap * 4); 
+
+        for (size_t i = 0; i < batch_size; ++i) {
+            ORam::BatchOperation op;
+            op.key = dist_key(rng);
+            int r = rng() % 100;
+            
+            if (growing_phase) {
+                if (r < 90) {
+                    op.type = ORam::OpType::Insert;
+                    op.val = std::make_unique<uint8_t[]>(16);
+                } else {
+                    op.type = ORam::OpType::Search;
+                }
+            } else {
+                if (r < 90) {
+                    op.type = ORam::OpType::Delete;
+                } else {
+                    op.type = ORam::OpType::Search;
+                }
+            }
+            batch.push_back(std::move(op));
+        }
+
+        auto t_start = std::chrono::high_resolution_clock::now();
+        scaling_oram.ExecuteBatch(batch, enc_key, true); 
+        auto t_end = std::chrono::high_resolution_clock::now();
+        double ms = std::chrono::duration<double, std::milli>(t_end - t_start).count();
+
+        size_t new_cap = scaling_oram.Capacity();
+        std::string scaling_event = "None";
+        if (new_cap > current_cap) scaling_event = "SCALED_UP";
+        if (new_cap < current_cap) scaling_event = "SCALED_DOWN";
+
+        std::cout << b << "," << phase_str << "," << scaling_event << "," << batch_size << "," << ms << "," << new_cap << "\n";
+    }
+    std::cout << "\n";
+}
+
 int main(int argc, char** argv) {
     size_t batch_size = 131072;
     if (argc > 1) {
@@ -96,6 +166,9 @@ int main(int argc, char** argv) {
     RunDynoWorkload(oram, enc_key, "TestDynoInsertsOnly", batch_size, 2);
     RunDynoWorkload(oram, enc_key, "TestDynoDeletesOnly", batch_size, 3);
     RunDynoWorkload(oram, enc_key, "TestDynoMixedWorkload", batch_size, 4);
+
+    // Run the continuous scaling test
+    TestDynoContinuousScaling(enc_key, batch_size);
 
     return 0;
 }
