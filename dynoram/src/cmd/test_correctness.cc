@@ -1,6 +1,7 @@
 #include <iostream>
 #include <cassert>
 #include <string>
+#include <random>
 #include <memory>
 #include <cstring>
 #include "src/dynamic/oheap.h"
