@@ -328,8 +328,16 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
   auto comp2 = [](const OblivElem& a, const OblivElem& b) {
     bool type_eq = sn::obliv::ct_eq(a.op_type, b.op_type);
     bool type_lt = sn::obliv::ct_lt(a.op_type, b.op_type);
+    
+    bool dummy_eq = sn::obliv::ct_eq(a.is_dummy, b.is_dummy);
     bool dummy_lt = (!a.is_dummy) && b.is_dummy;
-    return sn::obliv::ct_select(dummy_lt, type_lt, type_eq);
+    
+    bool seq_lt = sn::obliv::ct_lt(a.seq, b.seq);
+    
+    bool eq_so_far = type_eq & dummy_eq;
+    bool lt_so_far = sn::obliv::ct_select(dummy_lt, type_lt, type_eq);
+    
+    return sn::obliv::ct_select(seq_lt, lt_so_far, eq_so_far);
   };
   sn::sortshuffle::ser::bitonic::detail::bitonic_sort_impl(elems.data(), B, key_ext, comp2, hook);
   if (B == 1) std::cout << "[DEBUG] Phase 3 (Bitonic Sort 2) took " << get_ms() << " ms" << std::endl;

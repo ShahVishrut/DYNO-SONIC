@@ -274,8 +274,11 @@ void TestORamComprehensiveMixedWorkload() {
             op.type = dyno::dynamic_stepping_path_oram::ORam::OpType::Search;
             // shadow state remains same
         } else {
-            // Delete
-            op.type = dyno::dynamic_stepping_path_oram::ORam::OpType::Delete;
+            // Delete (in Block ORAM, we delete a key by overwriting it with zeroes)
+            op.type = dyno::dynamic_stepping_path_oram::ORam::OpType::Insert;
+            op.val = std::make_unique<uint8_t[]>(8);
+            uint64_t v = 0;
+            std::memcpy(op.val.get(), &v, 8);
             shadow_state.erase(op.key);
         }
         mixed_batch.push_back(std::move(op));
