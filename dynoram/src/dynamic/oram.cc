@@ -365,7 +365,13 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
 
   if (sub_orams_[1]) {
     std::vector<static_path_oram::Block> sn_inserts;
-    for (auto& b : inserts) sn_inserts.push_back(static_path_oram::Block(0, b.key_));
+    for (auto& b : inserts) {
+        static_path_oram::Block new_b(0, b.key_);
+        if (b.val_) {
+            new_b.val_ = std::move(b.val_);
+        }
+        sn_inserts.push_back(std::move(new_b));
+    }
     sub_orams_[1]->InsertBatch(sn_inserts, enc_key, steady_state);
   }
   
