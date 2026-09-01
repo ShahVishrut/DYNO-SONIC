@@ -316,11 +316,11 @@ void TestORamComprehensiveMixedWorkload() {
 }
 
 int main() {
+    TestORamComprehensiveMixedWorkload();
     TestOMap();
     TestOHeap();
     TestORam();
     TestORamBatch();
-    TestORamComprehensiveMixedWorkload();
     std::cout << "\n✅ All correctness tests passed successfully!\n";
     return 0;
 }
