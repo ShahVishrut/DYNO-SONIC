@@ -130,3 +130,23 @@ cc_binary(
     ],
     copts = COPTS,
 )
+
+cc_binary(
+    name = "sonic_throughput_bench",
+    srcs = ["bench/dynamic_oram/sonic_throughput_bench.cc"],
+    deps = [
+        "//src/dynamic:oram",
+        "@openssl.dev//:openssl",
+    ],
+    copts = COPTS,
+)
+
+cc_binary(
+    name = "dyno_sonic_bench",
+    srcs = ["bench/dynamic_oram/dyno_sonic_bench.cc"],
+    deps = [
+        "//src/dynamic:oram",
+        "@openssl.dev//:openssl",
+    ],
+    copts = COPTS,
+)

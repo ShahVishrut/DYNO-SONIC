@@ -46,7 +46,7 @@ class ORam {
     Block result; // For Search
   };
 
-  void ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key);
+  void ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key, bool steady_state = true);
 
   [[nodiscard]] size_t Capacity() const { return capacity_; }
   [[nodiscard]] size_t Size() const { return size_; }

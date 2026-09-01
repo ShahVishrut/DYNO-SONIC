@@ -310,7 +310,7 @@ void SonicORamAdapter::FlushEpoch() {
   impl_->client->flush_epoch();
 }
 
-std::vector<static_path_oram::Block> SonicORamAdapter::ReadAndRemoveBatch(const std::vector<std::pair<static_path_oram::Key, bool>>& keys_with_real_flags, crypto::Key enc_key) {
+std::vector<static_path_oram::Block> SonicORamAdapter::ReadAndRemoveBatch(const std::vector<std::pair<static_path_oram::Key, bool>>& keys_with_real_flags, crypto::Key enc_key, bool steady_state) {
   size_t B = keys_with_real_flags.size();
   std::vector<static_path_oram::Block> results;
   results.reserve(B);
@@ -432,7 +432,9 @@ std::vector<static_path_oram::Block> SonicORamAdapter::ReadAndRemoveBatch(const 
       
       std::unique_lock<std::mutex> lock(ops_mutex);
       chunk_cv.wait(lock, [&tasks_pending]{ return tasks_pending == 0; });
-      impl_->client->flush_epoch();
+      if (steady_state) {
+          impl_->client->flush_epoch();
+      }
   }
 
   for (int i = 0; i < num_workers; ++i) {
@@ -443,7 +445,7 @@ std::vector<static_path_oram::Block> SonicORamAdapter::ReadAndRemoveBatch(const 
   return results;
 }
 
-std::vector<static_path_oram::Block> SonicORamAdapter::ReadBatch(const std::vector<std::pair<static_path_oram::Key, bool>>& keys_with_real_flags, crypto::Key enc_key) {
+std::vector<static_path_oram::Block> SonicORamAdapter::ReadBatch(const std::vector<std::pair<static_path_oram::Key, bool>>& keys_with_real_flags, crypto::Key enc_key, bool steady_state) {
   size_t B = keys_with_real_flags.size();
   std::vector<static_path_oram::Block> results;
   results.reserve(B);
@@ -562,12 +564,14 @@ std::vector<static_path_oram::Block> SonicORamAdapter::ReadBatch(const std::vect
       }
       std::unique_lock<std::mutex> lock(ops_mutex);
       chunk_cv.wait(lock, [&tasks_pending]{ return tasks_pending == 0; });
-      impl_->client->flush_epoch();
+      if (steady_state) {
+          impl_->client->flush_epoch();
+      }
   }
   return results;
 }
 
-void SonicORamAdapter::InsertBatch(std::vector<static_path_oram::Block>& blocks, crypto::Key enc_key) {
+void SonicORamAdapter::InsertBatch(std::vector<static_path_oram::Block>& blocks, crypto::Key enc_key, bool steady_state) {
   size_t B = blocks.size();
   std::vector<uint64_t> batch_cur_leaves(B, 0);
   std::vector<uint64_t> batch_new_leaves(B, 0);
@@ -686,7 +690,9 @@ void SonicORamAdapter::InsertBatch(std::vector<static_path_oram::Block>& blocks,
       }
       std::unique_lock<std::mutex> lock(ops_mutex);
       chunk_cv.wait(lock, [&tasks_pending]{ return tasks_pending == 0; });
-      impl_->client->flush_epoch();
+      if (steady_state) {
+          impl_->client->flush_epoch();
+      }
   }
 
   for (int i = 0; i < num_workers; ++i) {
@@ -779,7 +785,7 @@ double SonicORamAdapter::RawSonicBenchmark(int work_type, size_t batch_size) {
 
 
 
-double SonicORamAdapter::SpinlockSonicBenchmark(int work_type, size_t batch_size) {
+double SonicORamAdapter::SpinlockSonicBenchmark(int work_type, size_t batch_size, bool steady_state) {
     int num_workers = 16;
     size_t chunk_size = 32;
     
@@ -851,11 +857,18 @@ double SonicORamAdapter::SpinlockSonicBenchmark(int work_type, size_t batch_size
         // Wait for workers to finish accesses
         sync_point.arrive_and_wait();
         
-        auto end_time = std::chrono::high_resolution_clock::now();
-        total_ms += std::chrono::duration<double, std::milli>(end_time - start_time).count();
+        if (!steady_state) {
+            auto end_time = std::chrono::high_resolution_clock::now();
+            total_ms += std::chrono::duration<double, std::milli>(end_time - start_time).count();
+        }
 
-        // Perform evictions while the timer is paused
+        // Perform evictions
         impl_->client->flush_epoch();
+        
+        if (steady_state) {
+            auto end_time = std::chrono::high_resolution_clock::now();
+            total_ms += std::chrono::duration<double, std::milli>(end_time - start_time).count();
+        }
         
         // Release workers for next chunk
         sync_point.arrive_and_wait();

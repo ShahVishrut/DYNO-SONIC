@@ -200,7 +200,7 @@ uint64_t ORam::SubORamsMemoryBytesMovedTotalSum() {
   return res;
 }
 
-void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key) {
+void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key, bool steady_state) {
   size_t B = batch.size();
   if (B == 0) return;
 
@@ -358,15 +358,15 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key)
     large_reads.push_back({k, is_real && (idx == 1)});
   }
 
-  if (sub_orams_[0]) sub_orams_[0]->ReadBatch(small_reads, enc_key);
-  if (sub_orams_[1]) sub_orams_[1]->ReadBatch(large_reads, enc_key);
+  if (sub_orams_[0]) sub_orams_[0]->ReadBatch(small_reads, enc_key, steady_state);
+  if (sub_orams_[1]) sub_orams_[1]->ReadBatch(large_reads, enc_key, steady_state);
 
   if (B == 1) std::cout << "[DEBUG] Phase 3.5 (ReadBatch) took " << get_ms() << " ms" << std::endl;
 
   if (sub_orams_[1]) {
     std::vector<static_path_oram::Block> sn_inserts;
     for (auto& b : inserts) sn_inserts.push_back(static_path_oram::Block(0, b.key_));
-    sub_orams_[1]->InsertBatch(sn_inserts, enc_key);
+    sub_orams_[1]->InsertBatch(sn_inserts, enc_key, steady_state);
   }
   
   if (B == 1) std::cout << "[DEBUG] Phase 3.6 (InsertBatch Original) took " << get_ms() << " ms" << std::endl;
