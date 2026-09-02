@@ -280,8 +280,7 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
     uint8_t op_type; // 0=Insert, 1=Search, 2=Delete, 3=Update
   };
 
-  size_t B = 1;
-  while (B < original_B) B *= 2;
+
   
   std::vector<OblivElem> elems(B);
   for (size_t i = 0; i < B; ++i) {
