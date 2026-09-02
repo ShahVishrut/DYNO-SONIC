@@ -388,6 +388,65 @@ void TestORamDeterministicScale() {
     auto res516 = oram->Read(516, enc_key);
     assert((res516.val_ == nullptr || res516.val_.get()[0] == 0) && "Key 516 never existed!");
     
+    // 4. Batch Mixed Ops (Deterministic Collapse Edge Cases)
+    std::vector<dyno::dynamic_stepping_path_oram::ORam::BatchOperation> batch4;
+    
+    // Key 1000: Insert(10) -> Update(11) -> Search (Should return 11)
+    batch4.push_back({dyno::dynamic_stepping_path_oram::ORam::OpType::Insert, 1000, std::make_unique<uint8_t[]>(8)});
+    std::memset(batch4.back().val.get(), 10, 8);
+    batch4.push_back({dyno::dynamic_stepping_path_oram::ORam::OpType::Update, 1000, std::make_unique<uint8_t[]>(8)});
+    std::memset(batch4.back().val.get(), 11, 8);
+    batch4.push_back({dyno::dynamic_stepping_path_oram::ORam::OpType::Search, 1000, nullptr});
+    
+    // Key 1001: Insert(10) -> Delete -> Search (Should return null/0)
+    batch4.push_back({dyno::dynamic_stepping_path_oram::ORam::OpType::Insert, 1001, std::make_unique<uint8_t[]>(8)});
+    std::memset(batch4.back().val.get(), 10, 8);
+    batch4.push_back({dyno::dynamic_stepping_path_oram::ORam::OpType::Delete, 1001, nullptr});
+    batch4.push_back({dyno::dynamic_stepping_path_oram::ORam::OpType::Search, 1001, nullptr});
+
+    // Key 1002: Insert(10) -> Search (returns 10) -> Update(11)
+    batch4.push_back({dyno::dynamic_stepping_path_oram::ORam::OpType::Insert, 1002, std::make_unique<uint8_t[]>(8)});
+    std::memset(batch4.back().val.get(), 10, 8);
+    batch4.push_back({dyno::dynamic_stepping_path_oram::ORam::OpType::Search, 1002, nullptr});
+    batch4.push_back({dyno::dynamic_stepping_path_oram::ORam::OpType::Update, 1002, std::make_unique<uint8_t[]>(8)});
+    std::memset(batch4.back().val.get(), 11, 8);
+
+    // Key 1003: Update(11) (on non-existent) -> Search (returns 11)
+    batch4.push_back({dyno::dynamic_stepping_path_oram::ORam::OpType::Update, 1003, std::make_unique<uint8_t[]>(8)});
+    std::memset(batch4.back().val.get(), 11, 8);
+    batch4.push_back({dyno::dynamic_stepping_path_oram::ORam::OpType::Search, 1003, nullptr});
+
+    // Key 1004: Delete (on non-existent) -> Insert(10) -> Search (returns 10)
+    batch4.push_back({dyno::dynamic_stepping_path_oram::ORam::OpType::Delete, 1004, nullptr});
+    batch4.push_back({dyno::dynamic_stepping_path_oram::ORam::OpType::Insert, 1004, std::make_unique<uint8_t[]>(8)});
+    std::memset(batch4.back().val.get(), 10, 8);
+    batch4.push_back({dyno::dynamic_stepping_path_oram::ORam::OpType::Search, 1004, nullptr});
+
+    // Key 1005: Insert(10) -> Delete -> Insert(11)
+    batch4.push_back({dyno::dynamic_stepping_path_oram::ORam::OpType::Insert, 1005, std::make_unique<uint8_t[]>(8)});
+    std::memset(batch4.back().val.get(), 10, 8);
+    batch4.push_back({dyno::dynamic_stepping_path_oram::ORam::OpType::Delete, 1005, nullptr});
+    batch4.push_back({dyno::dynamic_stepping_path_oram::ORam::OpType::Insert, 1005, std::make_unique<uint8_t[]>(8)});
+    std::memset(batch4.back().val.get(), 11, 8);
+    
+    std::cout << "  [Test] Executing Edge-Case Mixed Batch...\n";
+    oram->ExecuteBatch(batch4, enc_key);
+    
+    // Check in-batch Search returns
+    assert(batch4[2].val != nullptr && batch4[2].val.get()[0] == 11 && "Key 1000 Search should return 11!");
+    assert((batch4[5].val == nullptr || batch4[5].val.get()[0] == 0) && "Key 1001 Search should return null!");
+    assert(batch4[7].val != nullptr && batch4[7].val.get()[0] == 10 && "Key 1002 Search should return 10!");
+    assert(batch4[10].val != nullptr && batch4[10].val.get()[0] == 11 && "Key 1003 Search should return 11!");
+    assert(batch4[13].val != nullptr && batch4[13].val.get()[0] == 10 && "Key 1004 Search should return 10!");
+    
+    // Check final state in ORAM
+    auto res1000 = oram->Read(1000, enc_key); assert(res1000.val_ != nullptr && res1000.val_.get()[0] == 11);
+    auto res1001 = oram->Read(1001, enc_key); assert((res1001.val_ == nullptr || res1001.val_.get()[0] == 0));
+    auto res1002 = oram->Read(1002, enc_key); assert(res1002.val_ != nullptr && res1002.val_.get()[0] == 11);
+    auto res1003 = oram->Read(1003, enc_key); assert(res1003.val_ != nullptr && res1003.val_.get()[0] == 11);
+    auto res1004 = oram->Read(1004, enc_key); assert(res1004.val_ != nullptr && res1004.val_.get()[0] == 10);
+    auto res1005 = oram->Read(1005, enc_key); assert(res1005.val_ != nullptr && res1005.val_.get()[0] == 11);
+
     std::cout << "ORam Deterministic Scaling test passed!\n\n";
 }
 
