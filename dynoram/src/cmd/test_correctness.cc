@@ -416,7 +416,7 @@ void TestORamDeterministicScale() {
     batch4.push_back(make_op(dyno::dynamic_stepping_path_oram::ORam::OpType::Update, 1540, 200)); // Update 1540
     batch4.push_back(make_op(dyno::dynamic_stepping_path_oram::ORam::OpType::Search, 1540, 0)); // Search 1540
     
-    auto add_op = [&batch4](dyno::dynamic_stepping_path_oram::ORam::OpType type, uint64_t key, uint8_t val = 0) {
+    auto add_op = [&batch4, &make_op](dyno::dynamic_stepping_path_oram::ORam::OpType type, uint64_t key, uint8_t val = 0) {
         batch4.push_back(make_op(type, key, val));
     };
     
