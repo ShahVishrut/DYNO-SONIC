@@ -238,8 +238,8 @@ uint64_t ORam::SubORamsMemoryBytesMovedTotalSum() {
 }
 
 void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key, bool steady_state) {
-  size_t B = batch.size();
-  if (B == 0) return;
+  size_t original_B = batch.size();
+  if (original_B == 0) return;
 
   auto t_start = std::chrono::high_resolution_clock::now();
   auto get_ms = [&t_start]() {
