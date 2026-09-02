@@ -453,7 +453,7 @@ std::vector<static_path_oram::Key> SonicORamAdapter::ObliviousExtractValidKeys(s
       bool take = is_real & (count < k); 
       for (uint64_t j = 0; j < T; ++j) { 
           bool match = take & (count == j);
-          S_keys[j] = sn::obliv::ct_select(i, S_keys[j], match); 
+          S_keys[j] = sn::obliv::ct_select<static_path_oram::Key>(i, S_keys[j], match); 
       }
       count = sn::obliv::ct_select(count + 1, count, take);
   }
@@ -551,7 +551,8 @@ std::vector<static_path_oram::Block> SonicORamAdapter::ReadBatch(const std::vect
                           static_path_oram::BlockMetadata meta;
                           meta.key_ = op.key;
                           meta.pos_ = batch_new_leaves[j] + 1;
-                          bytes::ToBytes(meta, in_buf.data());
+                          auto meta_bytes = bytes::ToBytes(meta);
+                          std::copy(meta_bytes.begin(), meta_bytes.end(), in_buf.data());
                           std::copy(op.val.get(), op.val.get() + val_len_, in_buf.data() + sizeof(static_path_oram::BlockMetadata));
                       }
                       
