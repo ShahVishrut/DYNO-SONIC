@@ -549,20 +549,20 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
     BufferS.erase(BufferS.begin() + T, BufferS.end());
     BufferL.erase(BufferL.begin() + T, BufferL.end());
 
-    // Translate logical keys back to physical keys for destination AFTER swapping
+    // 5. Address Translation (MUST happen before physical key mapping)
+    ptr_S_ += std::max(static_cast<int64_t>(0), k_transfer);
+    ptr_L_ += std::max(static_cast<int64_t>(0), -k_transfer);
+    capacity_ += (a - real_DS);
+
+    // 6. Translate logical keys back to physical keys for destination AFTER swapping
     for (uint64_t i = 0; i < T; ++i) {
         if (BufferS[i].meta_.key_ != 0) BufferS[i].meta_.key_ = PhysicalKey(BufferS[i].meta_.key_, 0);
         if (BufferL[i].meta_.key_ != 0) BufferL[i].meta_.key_ = PhysicalKey(BufferL[i].meta_.key_, 1);
     }
 
-    // 5. Flush to Stashes
+    // 7. Flush to Stashes
     sub_orams_[0]->InsertBatch(BufferS, enc_key);
     sub_orams_[1]->InsertBatch(BufferL, enc_key);
-
-    // 6. Address Translation
-    ptr_S_ += std::max(static_cast<int64_t>(0), k_transfer);
-    ptr_L_ += std::max(static_cast<int64_t>(0), -k_transfer);
-    capacity_ += (a - real_DS);
   }
 
   // Phase 5: Cascading Resizing & Secondary Transfer

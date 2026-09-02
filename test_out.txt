@@ -1,0 +1,2 @@
+path '/Users/vishrutshah/Documents/UCSC/DYNO' does not contain a 'flake.nix', searching up
+error: path '/Users/vishrutshah/Documents/UCSC/DYNO' is not part of a flake (neither it nor its parent directories contain a 'flake.nix' file)
