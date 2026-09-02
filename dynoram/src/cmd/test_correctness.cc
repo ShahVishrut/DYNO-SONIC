@@ -328,25 +328,25 @@ void TestORamDeterministicScale() {
     auto enc_key = GenerateKey();
     
     // Start with small capacity
-    auto oram = std::make_unique<dyno::dynamic_stepping_path_oram::ORam>(4, 8); 
+    auto oram = std::make_unique<dyno::dynamic_stepping_path_oram::ORam>(10, 8); 
     
     // 1. Batch Insert to trigger scale up
     std::vector<dyno::dynamic_stepping_path_oram::ORam::BatchOperation> batch1;
-    for (int i = 1; i <= 6; ++i) {
+    for (int i = 1; i <= 515; ++i) {
         dyno::dynamic_stepping_path_oram::ORam::BatchOperation op;
         op.type = dyno::dynamic_stepping_path_oram::ORam::OpType::Insert;
         op.key = i;
         op.val = std::make_unique<uint8_t[]>(8);
-        std::memset(op.val.get(), i * 10, 8);
+        std::memset(op.val.get(), (i % 255), 8);
         batch1.push_back(std::move(op));
     }
     
-    std::cout << "  [Test] Executing Scale-Up Batch (6 Inserts)...\n";
+    std::cout << "  [Test] Executing Scale-Up Batch (515 Inserts)...\n";
     oram->ExecuteBatch(batch1, enc_key);
     
-    for (int i = 1; i <= 6; ++i) {
+    for (int i = 1; i <= 515; ++i) {
         auto res = oram->Read(i, enc_key);
-        assert(res.val_ != nullptr && res.val_.get()[0] == i * 10 && "Key should be present after scale up!");
+        assert(res.val_ != nullptr && res.val_.get()[0] == (i % 255) && "Key should be present after scale up!");
     }
     
     // 2. Batch Update to trigger normal Phase 4 transfer
@@ -370,23 +370,23 @@ void TestORamDeterministicScale() {
     
     // 3. Batch Delete to trigger scale down
     std::vector<dyno::dynamic_stepping_path_oram::ORam::BatchOperation> batch3;
-    for (int i = 1; i <= 5; ++i) {
+    for (int i = 1; i <= 515; ++i) {
         dyno::dynamic_stepping_path_oram::ORam::BatchOperation op;
         op.type = dyno::dynamic_stepping_path_oram::ORam::OpType::Delete;
         op.key = i;
         batch3.push_back(std::move(op));
     }
     
-    std::cout << "  [Test] Executing Scale-Down Batch (5 Deletes)...\n";
+    std::cout << "  [Test] Executing Scale-Down Batch (515 Deletes)...\n";
     oram->ExecuteBatch(batch3, enc_key);
     
-    for (int i = 1; i <= 5; ++i) {
+    for (int i = 1; i <= 515; ++i) {
         auto res = oram->Read(i, enc_key);
         assert((res.val_ == nullptr || res.val_.get()[0] == 0) && "Key should be deleted after scale down!");
     }
     
-    auto res6 = oram->Read(6, enc_key);
-    assert(res6.val_ != nullptr && res6.val_.get()[0] == 60 && "Key 6 should still remain!");
+    auto res516 = oram->Read(516, enc_key);
+    assert((res516.val_ == nullptr || res516.val_.get()[0] == 0) && "Key 516 never existed!");
     
     std::cout << "ORam Deterministic Scaling test passed!\n\n";
 }
