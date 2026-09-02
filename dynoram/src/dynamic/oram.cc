@@ -268,15 +268,25 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
     uint8_t op_type; // 0=Insert, 1=Search, 2=Delete, 3=Update
   };
 
+  size_t B = 1;
+  while (B < original_B) B *= 2;
+  
   std::vector<OblivElem> elems(B);
   for (size_t i = 0; i < B; ++i) {
-    elems[i].key = batch[i].key;
-    elems[i].seq = static_cast<uint32_t>(i);
-    elems[i].is_dummy = false;
-    if (batch[i].type == OpType::Insert) elems[i].op_type = 0;
-    else if (batch[i].type == OpType::Search) elems[i].op_type = 1;
-    else if (batch[i].type == OpType::Delete) elems[i].op_type = 2;
-    else elems[i].op_type = 3; // Update
+    if (i < original_B) {
+        elems[i].key = batch[i].key;
+        elems[i].seq = static_cast<uint32_t>(i);
+        elems[i].is_dummy = false;
+        if (batch[i].type == OpType::Insert) elems[i].op_type = 0;
+        else if (batch[i].type == OpType::Search) elems[i].op_type = 1;
+        else if (batch[i].type == OpType::Delete) elems[i].op_type = 2;
+        else elems[i].op_type = 3; // Update
+    } else {
+        elems[i].key = 0;
+        elems[i].seq = static_cast<uint32_t>(i);
+        elems[i].is_dummy = true;
+        elems[i].op_type = 255;
+    }
   }
 
   struct BatchSwapHook {
@@ -379,20 +389,24 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
   for (size_t i = 0; i < original_inserts; ++i) {
     Block b;
     bool is_real = !elems[i].is_dummy;
-    b.key_ = sn::obliv::ct_select<uint64_t>(batch[i].key, 0, is_real);
+    b.key_ = sn::obliv::ct_select<uint64_t>(batch[elems[i].seq].key, 0, is_real);
     
-    if (batch[i].val) {
+    if (batch[elems[i].seq].val) {
       b.val_ = std::make_unique<uint8_t[]>(val_len_);
-      std::copy(batch[i].val.get(), batch[i].val.get() + val_len_, b.val_.get());
+      std::copy(batch[elems[i].seq].val.get(), batch[elems[i].seq].val.get() + val_len_, b.val_.get());
     }
     inserts.push_back(std::move(b));
   }
 
-  for (size_t i = 0; i < B; ++i) {
+  for (size_t i = 0; i < original_B; ++i) {
     Key k = batch[i].key;
-    bool is_real = !elems[i].is_dummy;
+    bool is_real = false;
+    for (size_t j = 0; j < B; ++j) {
+        bool match = sn::obliv::ct_eq<uint64_t>(elems[j].seq, i);
+        is_real = sn::obliv::ct_select<bool>(!elems[j].is_dummy, is_real, match);
+    }
     uint8_t idx = SubOramIndex(k);
-    uint8_t op_type = elems[i].op_type;
+    uint8_t op_type = static_cast<uint8_t>(batch[i].type);
     
     bool is_search = sn::obliv::ct_eq(op_type, static_cast<uint8_t>(1));
     bool is_delete = sn::obliv::ct_eq(op_type, static_cast<uint8_t>(2));
@@ -429,7 +443,7 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
       auto read_results = sub_orams_[0]->ReadBatch(small_ops, enc_key, steady_state);
       std::cout << "[DEBUG] Phase 2: small sub_oram ReadBatch done" << std::endl;
       // Copy read results back to batch for Search operations
-      for (size_t i = 0; i < B; ++i) {
+      for (size_t i = 0; i < original_B; ++i) {
           if (small_ops[i].is_real && sn::obliv::ct_eq(small_ops[i].op_type, static_cast<uint8_t>(1))) {
               batch[i].result.key_ = read_results[i].meta_.key_;
               if (read_results[i].val_) {
@@ -444,7 +458,7 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
       auto read_results = sub_orams_[1]->ReadBatch(large_ops, enc_key, steady_state);
       std::cout << "[DEBUG] Phase 2: large sub_oram ReadBatch done" << std::endl;
       std::cout << "[DEBUG] Post-Phase 2: large_ops processing start" << std::endl;
-      for (size_t i = 0; i < B; ++i) {
+      for (size_t i = 0; i < original_B; ++i) {
           if (large_ops[i].is_real && sn::obliv::ct_eq(large_ops[i].op_type, static_cast<uint8_t>(1))) {
               batch[i].result.key_ = read_results[i].meta_.key_;
               if (read_results[i].val_) {
