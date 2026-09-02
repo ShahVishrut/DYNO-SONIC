@@ -425,7 +425,9 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
   }
 
   if (sub_orams_[0]) {
+      std::cout << "[DEBUG] Phase 2: small sub_oram ReadBatch" << std::endl;
       auto read_results = sub_orams_[0]->ReadBatch(small_ops, enc_key, steady_state);
+      std::cout << "[DEBUG] Phase 2: small sub_oram ReadBatch done" << std::endl;
       // Copy read results back to batch for Search operations
       for (size_t i = 0; i < B; ++i) {
           if (small_ops[i].is_real && sn::obliv::ct_eq(small_ops[i].op_type, static_cast<uint8_t>(1))) {
@@ -438,7 +440,9 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
       }
   }
   if (sub_orams_[1]) {
+      std::cout << "[DEBUG] Phase 2: large sub_oram ReadBatch" << std::endl;
       auto read_results = sub_orams_[1]->ReadBatch(large_ops, enc_key, steady_state);
+      std::cout << "[DEBUG] Phase 2: large sub_oram ReadBatch done" << std::endl;
       // Copy read results back to batch for Search operations
       for (size_t i = 0; i < B; ++i) {
           if (large_ops[i].is_real && sn::obliv::ct_eq(large_ops[i].op_type, static_cast<uint8_t>(1))) {
@@ -461,7 +465,9 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
         }
         sn_inserts.push_back(std::move(new_b));
     }
+    std::cout << "[DEBUG] Phase 3: large sub_oram InsertBatch" << std::endl;
     sub_orams_[1]->InsertBatch(sn_inserts, enc_key, steady_state);
+    std::cout << "[DEBUG] Phase 3: large sub_oram InsertBatch done" << std::endl;
   }
 
   // Phase 4: Oblivious Net Growth & Boundary Checking
