@@ -204,6 +204,10 @@ static_path_oram::Block SonicORamAdapter::Read(static_path_oram::Pos p, static_p
   req.new_leaf = new_leaf;
   req.is_write = false; 
   
+  if (req.address >= capacity_) {
+      std::cout << "[DEBUG] Read: req.address=" << req.address << " >= capacity_=" << capacity_ << " k=" << k << " is_real=" << is_real << std::endl;
+  }
+  
   std::vector<uint8_t> in_buf(kSonicBlockBytes, 0);
   std::vector<uint8_t> out_buf(kSonicBlockBytes, 0);
   req.in = sn::util::span<uint8_t>(in_buf);
@@ -277,6 +281,10 @@ void SonicORamAdapter::Insert(static_path_oram::Block block, crypto::Key enc_key
   req.cur_leaf = cur_leaf;
   req.new_leaf = write_leaf;
   req.is_write = sn::obliv::ct_select<bool>(true, false, real); 
+  
+  if (req.address >= capacity_) {
+      std::cout << "[DEBUG] Insert: req.address=" << req.address << " >= capacity_=" << capacity_ << " k=" << k << " real=" << real << std::endl;
+  }
   
   std::vector<uint8_t> in_buf(kSonicBlockBytes, 0);
   std::vector<uint8_t> out_buf(kSonicBlockBytes, 0);
@@ -554,6 +562,10 @@ std::vector<static_path_oram::Block> SonicORamAdapter::ReadBatch(const std::vect
                       bool is_delete = sn::obliv::ct_eq<uint8_t>(op.op_type, 2);
                       req.is_write = is_update | is_delete;
                       
+                      if (req.address >= capacity_) {
+                          std::cout << "[DEBUG] ReadBatch: req.address=" << req.address << " >= capacity_=" << capacity_ << " op.key=" << op.key << " op.is_real=" << op.is_real << std::endl;
+                      }
+
                       std::vector<uint8_t> in_buf(kSonicBlockBytes, 0);
                       std::vector<uint8_t> out_buf(kSonicBlockBytes, 0);
                       
@@ -726,6 +738,11 @@ void SonicORamAdapter::InsertBatch(std::vector<static_path_oram::Block>& blocks,
                           req.is_write = sn::obliv::ct_select<bool>(true, false, real);
                           req.in = sn::util::span<uint8_t>(in_buf);
                           req.out = sn::util::span<uint8_t>(out_buf);
+                          
+                          if (req.address >= capacity_) {
+                              std::cout << "[DEBUG] InsertBatch: req.address=" << req.address << " >= capacity_=" << capacity_ << " k=" << k << " real=" << real << std::endl;
+                          }
+                          
                           impl_->client->access(req, tl_scratch);
                       }
                       auto post_ops = impl_->client->state_ref().metrics_snapshot().access_ops;
