@@ -233,7 +233,7 @@ void TestORamComprehensiveMixedWorkload() {
     std::cout << "Testing DYNO+SONIC Comprehensive Mixed Workload Correctness...\n";
     auto enc_key = GenerateKey();
     
-    auto oram = std::make_unique<dyno::dynamic_stepping_path_oram::ORam>(1024, 8); // Capacity 1024, val_len 8
+    auto oram = std::make_unique<dyno::dynamic_stepping_path_oram::ORam>(10, 8); // Capacity 1024, val_len 8
     std::map<uint64_t, uint64_t> shadow_state;
     
     std::mt19937 rng(1337);
@@ -329,8 +329,8 @@ void TestORamDeterministicScale() {
     std::cout << "Testing DYNO+SONIC Deterministic Scaling (Phase 4 & 5)...\n";
     auto enc_key = GenerateKey();
     
-    // Start with small capacity
-    auto oram = std::make_unique<dyno::dynamic_stepping_path_oram::ORam>(1024, 8); 
+    // Start with small capacity (2^10 = 1024)
+    auto oram = std::make_unique<dyno::dynamic_stepping_path_oram::ORam>(10, 8); 
     
     // 1. Batch Insert to trigger scale up
     std::vector<dyno::dynamic_stepping_path_oram::ORam::BatchOperation> batch1;
