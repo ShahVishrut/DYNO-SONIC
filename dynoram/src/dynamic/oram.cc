@@ -567,10 +567,11 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
 
   // Phase 5: Cascading Resizing & Secondary Transfer
   if (scale_up) {
+    int64_t old_y = sub_orams_[1]->Capacity();
     sub_orams_[0] = std::move(sub_orams_[1]);
-    sub_orams_[1] = std::make_unique<PORam>(2 * capacity_, val_len_, true);
+    sub_orams_[1] = std::make_unique<PORam>(2 * old_y, val_len_, true);
     
-    int64_t C = sub_orams_[1]->Capacity(); // Old large capacity (y)
+    int64_t C = sub_orams_[0]->Capacity(); // Old large capacity (y)
     int64_t total_elements = capacity_;
     int64_t excess = std::max<int64_t>(0, total_elements - C);
     int64_t k_sec = 2 * excess;
@@ -618,8 +619,9 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
         sub_orams_[1]->InsertBatch(BufferS, enc_key);
     }
   } else if (scale_down) {
+    int64_t old_x = sub_orams_[0]->Capacity();
     sub_orams_[1] = std::move(sub_orams_[0]);
-    sub_orams_[0] = std::make_unique<PORam>(capacity_ / 2, val_len_, true);
+    sub_orams_[0] = std::make_unique<PORam>(old_x / 2, val_len_, true);
     
     int64_t C = sub_orams_[1]->Capacity(); // Old small capacity (x)
     int64_t total_elements = capacity_;
