@@ -561,8 +561,8 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
     }
 
     // 7. Flush to Stashes
-    sub_orams_[0]->InsertBatch(BufferS, enc_key);
-    sub_orams_[1]->InsertBatch(BufferL, enc_key);
+    sub_orams_[0]->InsertBatch(BufferS, enc_key, true);
+    sub_orams_[1]->InsertBatch(BufferL, enc_key, true);
   }
 
   // Phase 5: Cascading Resizing & Secondary Transfer
@@ -618,7 +618,7 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
         for (uint64_t i = 0; i < Buffer.size(); ++i) {
             if (Buffer[i].meta_.key_ != 0) Buffer[i].meta_.key_ = PhysicalKey(Buffer[i].meta_.key_, 1);
         }
-        sub_orams_[1]->InsertBatch(Buffer, enc_key);
+        sub_orams_[1]->InsertBatch(Buffer, enc_key, true);
     }
   } else if (scale_down) {
     int64_t old_x = sub_orams_[0]->Capacity();
@@ -672,7 +672,7 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
         for (uint64_t i = 0; i < Buffer.size(); ++i) {
             if (Buffer[i].meta_.key_ != 0) Buffer[i].meta_.key_ = PhysicalKey(Buffer[i].meta_.key_, 0);
         }
-        sub_orams_[0]->InsertBatch(Buffer, enc_key);
+        sub_orams_[0]->InsertBatch(Buffer, enc_key, true);
     }
   }
 }

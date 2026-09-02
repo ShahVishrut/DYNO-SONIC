@@ -413,7 +413,10 @@ std::vector<static_path_oram::Block> SonicORamAdapter::ReadAndRemoveBatch(const 
                       req.out = sn::util::span<uint8_t>(out_buf);
 
                       auto pre_ops = impl_->client->state_ref().metrics_snapshot().access_ops;
-                      impl_->client->access(req, tl_scratch);
+                      {
+                          std::lock_guard<std::mutex> client_lock(ops_mutex);
+                          impl_->client->access(req, tl_scratch);
+                      }
                       auto post_ops = impl_->client->state_ref().metrics_snapshot().access_ops;
                       local_ops += (post_ops - pre_ops);
 
@@ -584,7 +587,10 @@ std::vector<static_path_oram::Block> SonicORamAdapter::ReadBatch(const std::vect
                       req.out = sn::util::span<uint8_t>(out_buf);
 
                       auto pre_ops = impl_->client->state_ref().metrics_snapshot().access_ops;
-                      impl_->client->access(req, tl_scratch);
+                      {
+                          std::lock_guard<std::mutex> client_lock(ops_mutex);
+                          impl_->client->access(req, tl_scratch);
+                      }
                       auto post_ops = impl_->client->state_ref().metrics_snapshot().access_ops;
                       local_ops += (post_ops - pre_ops);
 
@@ -729,7 +735,10 @@ void SonicORamAdapter::InsertBatch(std::vector<static_path_oram::Block>& blocks,
                           new_block.address = k - 1;
                           new_block.leaf_ix = batch_new_leaves[j];
                           std::copy(in_buf.begin(), in_buf.end(), new_block.data.begin());
-                          impl_->client->insert(new_block);
+                          {
+                              std::lock_guard<std::mutex> client_lock(ops_mutex);
+                              impl_->client->insert(new_block);
+                          }
                       } else {
                           sn::oram::access_request req;
                           req.address = sn::obliv::ct_select<uint64_t>(k - 1, 0, real);
@@ -743,7 +752,10 @@ void SonicORamAdapter::InsertBatch(std::vector<static_path_oram::Block>& blocks,
                               std::cout << "[DEBUG] InsertBatch: req.address=" << req.address << " >= capacity_=" << capacity_ << " k=" << k << " real=" << real << std::endl;
                           }
                           
-                          impl_->client->access(req, tl_scratch);
+                          {
+                              std::lock_guard<std::mutex> client_lock(ops_mutex);
+                              impl_->client->access(req, tl_scratch);
+                          }
                       }
                       auto post_ops = impl_->client->state_ref().metrics_snapshot().access_ops;
                       local_ops += (post_ops - pre_ops);
