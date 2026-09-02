@@ -542,18 +542,22 @@ std::vector<static_path_oram::Block> SonicORamAdapter::ReadBatch(const std::vect
                       req.address = sn::obliv::ct_select<uint64_t>(op.key - 1, UINT64_MAX, op.is_real);
                       req.cur_leaf = batch_cur_leaves[j];
                       req.new_leaf = batch_new_leaves[j];
-                      req.is_write = sn::obliv::ct_eq<uint8_t>(op.op_type, 3); // Update
+                      bool is_update = sn::obliv::ct_eq<uint8_t>(op.op_type, 3);
+                      bool is_delete = sn::obliv::ct_eq<uint8_t>(op.op_type, 2);
+                      req.is_write = is_update | is_delete;
                       
                       std::vector<uint8_t> in_buf(kSonicBlockBytes, 0);
                       std::vector<uint8_t> out_buf(kSonicBlockBytes, 0);
                       
-                      if (req.is_write && op.val) {
+                      if (req.is_write) {
                           static_path_oram::BlockMetadata meta;
-                          meta.key_ = op.key;
-                          meta.pos_ = batch_new_leaves[j] + 1;
+                          meta.key_ = sn::obliv::ct_select<uint64_t>(op.key, 0, is_update);
+                          meta.pos_ = sn::obliv::ct_select<uint64_t>(batch_new_leaves[j] + 1, 0, is_update);
                           auto meta_bytes = bytes::ToBytes(meta);
                           std::copy(meta_bytes.begin(), meta_bytes.end(), in_buf.data());
-                          std::copy(op.val.get(), op.val.get() + val_len_, in_buf.data() + sizeof(static_path_oram::BlockMetadata));
+                          if (is_update && op.val) {
+                              std::copy(op.val.get(), op.val.get() + val_len_, in_buf.data() + sizeof(static_path_oram::BlockMetadata));
+                          }
                       }
                       
                       req.in = sn::util::span<uint8_t>(in_buf);
