@@ -493,21 +493,28 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
 
   // Phase 4: Oblivious Buffer Swapping & Transfer (via SONIC Global Stashes)
   if (sub_orams_[0] && sub_orams_[1] && T > 0) {
+    std::cout << "[DEBUG] Phase 4 Start. T=" << T << " k_transfer=" << k_transfer << std::endl;
     // 1. Pad T to power of 2 for OCompact
     int64_t T_pow2 = 1;
     while (T_pow2 < T) T_pow2 *= 2;
 
     std::vector<Key> S_extracted = sub_orams_[0]->ObliviousExtractValidKeys(std::max<int64_t>(0, k_transfer), T);
     std::vector<Key> L_extracted = sub_orams_[1]->ObliviousExtractValidKeys(std::max<int64_t>(0, -k_transfer), T);
+    
+    std::cout << "[DEBUG] Phase 4 extracted keys" << std::endl;
 
-    std::vector<std::pair<Key, bool>> S_keys, L_keys;
+    // 2. Read into global Buffers
+    std::vector<std::pair<Key, bool>> keys_S, keys_L;
     for (int64_t i = 0; i < T; ++i) {
-        S_keys.push_back({S_extracted[i], S_extracted[i] != 0});
-        L_keys.push_back({L_extracted[i], L_extracted[i] != 0});
+        keys_S.push_back({S_extracted[i], S_extracted[i] != 0});
+        keys_L.push_back({L_extracted[i], L_extracted[i] != 0});
     }
 
-    auto BufferS = sub_orams_[0]->ReadAndRemoveBatch(S_keys, enc_key);
-    auto BufferL = sub_orams_[1]->ReadAndRemoveBatch(L_keys, enc_key);
+    std::cout << "[DEBUG] Phase 4 extracting BufferS" << std::endl;
+    std::vector<static_path_oram::Block> BufferS = sub_orams_[0]->ReadAndRemoveBatch(keys_S, enc_key);
+    std::cout << "[DEBUG] Phase 4 extracting BufferL" << std::endl;
+    std::vector<static_path_oram::Block> BufferL = sub_orams_[1]->ReadAndRemoveBatch(keys_L, enc_key);
+    std::cout << "[DEBUG] Phase 4 Buffers extracted" << std::endl;
 
     // Pad buffers to T_pow2 with pure dummies
     for (uint64_t i = T; i < T_pow2; ++i) {
@@ -561,8 +568,11 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
     }
 
     // 7. Flush to Stashes
+    std::cout << "[DEBUG] Phase 4 inserting BufferS" << std::endl;
     sub_orams_[0]->InsertBatch(BufferS, enc_key, true);
+    std::cout << "[DEBUG] Phase 4 inserting BufferL" << std::endl;
     sub_orams_[1]->InsertBatch(BufferL, enc_key, true);
+    std::cout << "[DEBUG] Phase 4 complete" << std::endl;
   }
 
   // Phase 5: Cascading Resizing & Secondary Transfer
@@ -586,7 +596,9 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
             keys.push_back({extracted[i], extracted[i] != 0});
         }
         
+        std::cout << "[DEBUG] Phase 5 ReadAndRemoveBatch from sub_orams_[1]" << std::endl;
         Buffer = sub_orams_[1]->ReadAndRemoveBatch(keys, enc_key);
+        std::cout << "[DEBUG] Phase 5 ReadAndRemoveBatch complete" << std::endl;
         
         for (uint64_t i = T_sec; i < T_sec_pow2; ++i) {
             Buffer.emplace_back(true);
@@ -618,7 +630,9 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
         for (uint64_t i = 0; i < Buffer.size(); ++i) {
             if (Buffer[i].meta_.key_ != 0) Buffer[i].meta_.key_ = PhysicalKey(Buffer[i].meta_.key_, 1);
         }
+        std::cout << "[DEBUG] Phase 5 InsertBatch to sub_orams_[1]" << std::endl;
         sub_orams_[1]->InsertBatch(Buffer, enc_key, true);
+        std::cout << "[DEBUG] Phase 5 InsertBatch complete" << std::endl;
     }
   } else if (scale_down) {
     int64_t old_x = sub_orams_[0]->Capacity();
