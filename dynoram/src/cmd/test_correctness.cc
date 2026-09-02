@@ -391,43 +391,45 @@ void TestORamDeterministicScale() {
     // 4. Batch Mixed Ops (Deterministic Collapse Edge Cases)
     std::vector<dyno::dynamic_stepping_path_oram::ORam::BatchOperation> batch4;
     
+    auto add_op = [&batch4](dyno::dynamic_stepping_path_oram::ORam::OpType type, uint64_t key, uint8_t val = 0) {
+        dyno::dynamic_stepping_path_oram::ORam::BatchOperation op;
+        op.type = type;
+        op.key = key;
+        if (type == dyno::dynamic_stepping_path_oram::ORam::OpType::Insert || type == dyno::dynamic_stepping_path_oram::ORam::OpType::Update) {
+            op.val = std::make_unique<uint8_t[]>(8);
+            std::memset(op.val.get(), val, 8);
+        }
+        batch4.push_back(std::move(op));
+    };
+    
     // Key 1000: Insert(10) -> Update(11) -> Search (Should return 11)
-    batch4.push_back({dyno::dynamic_stepping_path_oram::ORam::OpType::Insert, 1000, std::make_unique<uint8_t[]>(8)});
-    std::memset(batch4.back().val.get(), 10, 8);
-    batch4.push_back({dyno::dynamic_stepping_path_oram::ORam::OpType::Update, 1000, std::make_unique<uint8_t[]>(8)});
-    std::memset(batch4.back().val.get(), 11, 8);
-    batch4.push_back({dyno::dynamic_stepping_path_oram::ORam::OpType::Search, 1000, nullptr});
+    add_op(dyno::dynamic_stepping_path_oram::ORam::OpType::Insert, 1000, 10);
+    add_op(dyno::dynamic_stepping_path_oram::ORam::OpType::Update, 1000, 11);
+    add_op(dyno::dynamic_stepping_path_oram::ORam::OpType::Search, 1000);
     
     // Key 1001: Insert(10) -> Delete -> Search (Should return null/0)
-    batch4.push_back({dyno::dynamic_stepping_path_oram::ORam::OpType::Insert, 1001, std::make_unique<uint8_t[]>(8)});
-    std::memset(batch4.back().val.get(), 10, 8);
-    batch4.push_back({dyno::dynamic_stepping_path_oram::ORam::OpType::Delete, 1001, nullptr});
-    batch4.push_back({dyno::dynamic_stepping_path_oram::ORam::OpType::Search, 1001, nullptr});
+    add_op(dyno::dynamic_stepping_path_oram::ORam::OpType::Insert, 1001, 10);
+    add_op(dyno::dynamic_stepping_path_oram::ORam::OpType::Delete, 1001);
+    add_op(dyno::dynamic_stepping_path_oram::ORam::OpType::Search, 1001);
 
     // Key 1002: Insert(10) -> Search (returns 10) -> Update(11)
-    batch4.push_back({dyno::dynamic_stepping_path_oram::ORam::OpType::Insert, 1002, std::make_unique<uint8_t[]>(8)});
-    std::memset(batch4.back().val.get(), 10, 8);
-    batch4.push_back({dyno::dynamic_stepping_path_oram::ORam::OpType::Search, 1002, nullptr});
-    batch4.push_back({dyno::dynamic_stepping_path_oram::ORam::OpType::Update, 1002, std::make_unique<uint8_t[]>(8)});
-    std::memset(batch4.back().val.get(), 11, 8);
+    add_op(dyno::dynamic_stepping_path_oram::ORam::OpType::Insert, 1002, 10);
+    add_op(dyno::dynamic_stepping_path_oram::ORam::OpType::Search, 1002);
+    add_op(dyno::dynamic_stepping_path_oram::ORam::OpType::Update, 1002, 11);
 
     // Key 1003: Update(11) (on non-existent) -> Search (returns 11)
-    batch4.push_back({dyno::dynamic_stepping_path_oram::ORam::OpType::Update, 1003, std::make_unique<uint8_t[]>(8)});
-    std::memset(batch4.back().val.get(), 11, 8);
-    batch4.push_back({dyno::dynamic_stepping_path_oram::ORam::OpType::Search, 1003, nullptr});
+    add_op(dyno::dynamic_stepping_path_oram::ORam::OpType::Update, 1003, 11);
+    add_op(dyno::dynamic_stepping_path_oram::ORam::OpType::Search, 1003);
 
     // Key 1004: Delete (on non-existent) -> Insert(10) -> Search (returns 10)
-    batch4.push_back({dyno::dynamic_stepping_path_oram::ORam::OpType::Delete, 1004, nullptr});
-    batch4.push_back({dyno::dynamic_stepping_path_oram::ORam::OpType::Insert, 1004, std::make_unique<uint8_t[]>(8)});
-    std::memset(batch4.back().val.get(), 10, 8);
-    batch4.push_back({dyno::dynamic_stepping_path_oram::ORam::OpType::Search, 1004, nullptr});
+    add_op(dyno::dynamic_stepping_path_oram::ORam::OpType::Delete, 1004);
+    add_op(dyno::dynamic_stepping_path_oram::ORam::OpType::Insert, 1004, 10);
+    add_op(dyno::dynamic_stepping_path_oram::ORam::OpType::Search, 1004);
 
     // Key 1005: Insert(10) -> Delete -> Insert(11)
-    batch4.push_back({dyno::dynamic_stepping_path_oram::ORam::OpType::Insert, 1005, std::make_unique<uint8_t[]>(8)});
-    std::memset(batch4.back().val.get(), 10, 8);
-    batch4.push_back({dyno::dynamic_stepping_path_oram::ORam::OpType::Delete, 1005, nullptr});
-    batch4.push_back({dyno::dynamic_stepping_path_oram::ORam::OpType::Insert, 1005, std::make_unique<uint8_t[]>(8)});
-    std::memset(batch4.back().val.get(), 11, 8);
+    add_op(dyno::dynamic_stepping_path_oram::ORam::OpType::Insert, 1005, 10);
+    add_op(dyno::dynamic_stepping_path_oram::ORam::OpType::Delete, 1005);
+    add_op(dyno::dynamic_stepping_path_oram::ORam::OpType::Insert, 1005, 11);
     
     std::cout << "  [Test] Executing Edge-Case Mixed Batch...\n";
     oram->ExecuteBatch(batch4, enc_key);
