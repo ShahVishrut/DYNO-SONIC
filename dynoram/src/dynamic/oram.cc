@@ -241,6 +241,18 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
   size_t original_B = batch.size();
   if (original_B == 0) return;
 
+  size_t B = 1;
+  while (B < original_B) B *= 2;
+  
+  if (B > original_B) {
+      for (size_t i = original_B; i < B; ++i) {
+          BatchOperation dummy;
+          dummy.type = OpType::Search;
+          dummy.key = 0;
+          batch.push_back(std::move(dummy));
+      }
+  }
+
   auto t_start = std::chrono::high_resolution_clock::now();
   auto get_ms = [&t_start]() {
       auto now = std::chrono::high_resolution_clock::now();
@@ -389,11 +401,11 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
   for (size_t i = 0; i < original_inserts; ++i) {
     Block b;
     bool is_real = !elems[i].is_dummy;
-    b.key_ = sn::obliv::ct_select<uint64_t>(batch[elems[i].seq].key, 0, is_real);
+    b.key_ = sn::obliv::ct_select<uint64_t>(batch[i].key, 0, is_real);
     
-    if (batch[elems[i].seq].val) {
+    if (batch[i].val) {
       b.val_ = std::make_unique<uint8_t[]>(val_len_);
-      std::copy(batch[elems[i].seq].val.get(), batch[elems[i].seq].val.get() + val_len_, b.val_.get());
+      std::copy(batch[i].val.get(), batch[i].val.get() + val_len_, b.val_.get());
     }
     inserts.push_back(std::move(b));
   }
@@ -711,6 +723,10 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
         }
         sub_orams_[0]->InsertBatch(Buffer, enc_key, true);
     }
+  }
+
+  if (B > original_B) {
+      batch.resize(original_B);
   }
 }
 
