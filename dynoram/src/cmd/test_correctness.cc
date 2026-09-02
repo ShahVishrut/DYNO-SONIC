@@ -233,7 +233,7 @@ void TestORamComprehensiveMixedWorkload() {
     std::cout << "Testing DYNO+SONIC Comprehensive Mixed Workload Correctness...\n";
     auto enc_key = GenerateKey();
     
-    auto oram = std::make_unique<dyno::dynamic_stepping_path_oram::ORam>(10, 8); // Capacity 1024, val_len 8
+    auto oram = std::make_unique<dyno::dynamic_stepping_path_oram::ORam>(1024, 8); // Capacity 1024, val_len 8
     std::map<uint64_t, uint64_t> shadow_state;
     
     std::mt19937 rng(1337);
@@ -245,7 +245,7 @@ void TestORamComprehensiveMixedWorkload() {
     std::vector<dyno::dynamic_stepping_path_oram::ORam::BatchOperation> seed_batch;
     for (int i = 1; i <= 512; ++i) {
         dyno::dynamic_stepping_path_oram::ORam::BatchOperation op;
-        op.type = dyno::dynamic_stepping_path_oram::ORam::OpType::Insert;
+        op.type = dyno::dynamic_stepping_path_oram::ORam::OpType::Update;
         op.key = i;
         op.val = std::make_unique<uint8_t[]>(8);
         uint64_t v = dist_val(rng);
@@ -255,21 +255,23 @@ void TestORamComprehensiveMixedWorkload() {
     }
     oram->ExecuteBatch(seed_batch, enc_key);
     
+    uint64_t next_new_key = 1025;
+    
     // Run massive mixed workload
     std::vector<dyno::dynamic_stepping_path_oram::ORam::BatchOperation> mixed_batch;
     for (int i = 0; i < 2048; ++i) {
         dyno::dynamic_stepping_path_oram::ORam::BatchOperation op;
-        op.key = dist_key(rng);
         int op_rand = dist_op(rng);
         
-        if (op_rand < 30) {
-            // Insert or Update
-            bool exists = shadow_state.count(op.key) > 0;
-            if (exists) {
-                op.type = dyno::dynamic_stepping_path_oram::ORam::OpType::Update;
-            } else {
-                op.type = dyno::dynamic_stepping_path_oram::ORam::OpType::Insert;
-            }
+        if (op_rand < 15) {
+            // Real Insert (Scale up)
+            op.key = next_new_key++;
+            op.type = dyno::dynamic_stepping_path_oram::ORam::OpType::Insert;
+        } else if (op_rand < 40) {
+            // Update
+            op.key = dist_key(rng);
+            op.type = dyno::dynamic_stepping_path_oram::ORam::OpType::Update;
+        } else if (op_rand < 80) {
             op.val = std::make_unique<uint8_t[]>(8);
             uint64_t v = dist_val(rng);
             std::memcpy(op.val.get(), &v, 8);
@@ -293,7 +295,7 @@ void TestORamComprehensiveMixedWorkload() {
     
     // Verify Final State
     std::cout << "Verifying Final State against Shadow Map...\n";
-    for (uint64_t k = 1; k <= 1024; ++k) {
+    for (uint64_t k = 1; k < next_new_key; ++k) {
         auto res = oram->Read(k, enc_key);
         bool found_in_oram = (res.val_ != nullptr && res.val_.get()[0] != 0); // Using the fact that deleted blocks are usually 0-filled or null
         uint64_t oram_val = 0;
@@ -328,11 +330,11 @@ void TestORamDeterministicScale() {
     auto enc_key = GenerateKey();
     
     // Start with small capacity
-    auto oram = std::make_unique<dyno::dynamic_stepping_path_oram::ORam>(10, 8); 
+    auto oram = std::make_unique<dyno::dynamic_stepping_path_oram::ORam>(1024, 8); 
     
     // 1. Batch Insert to trigger scale up
     std::vector<dyno::dynamic_stepping_path_oram::ORam::BatchOperation> batch1;
-    for (int i = 1; i <= 515; ++i) {
+    for (int i = 1025; i <= 1539; ++i) {
         dyno::dynamic_stepping_path_oram::ORam::BatchOperation op;
         op.type = dyno::dynamic_stepping_path_oram::ORam::OpType::Insert;
         op.key = i;
@@ -344,33 +346,39 @@ void TestORamDeterministicScale() {
     std::cout << "  [Test] Executing Scale-Up Batch (515 Inserts)...\n";
     oram->ExecuteBatch(batch1, enc_key);
     
-    for (int i = 1; i <= 515; ++i) {
+    for (int i = 1025; i <= 1539; ++i) {
         auto res = oram->Read(i, enc_key);
-        assert(res.val_ != nullptr && res.val_.get()[0] == (i % 255) && "Key should be present after scale up!");
+        if (res.val_ == nullptr || res.val_.get()[0] != (i % 255)) {
+            std::cerr << "Mismatch at Key " << i << " after scale up!\n";
+            assert(false);
+        }
     }
     
     // 2. Batch Update to trigger normal Phase 4 transfer
     std::vector<dyno::dynamic_stepping_path_oram::ORam::BatchOperation> batch2;
-    for (int i = 1; i <= 3; ++i) {
+    for (int i = 1025; i <= 1027; ++i) {
         dyno::dynamic_stepping_path_oram::ORam::BatchOperation op;
         op.type = dyno::dynamic_stepping_path_oram::ORam::OpType::Update;
         op.key = i;
         op.val = std::make_unique<uint8_t[]>(8);
-        std::memset(op.val.get(), i * 20, 8);
+        std::memset(op.val.get(), (i % 255) + 20, 8);
         batch2.push_back(std::move(op));
     }
     
     std::cout << "  [Test] Executing Update Batch (3 Updates)...\n";
     oram->ExecuteBatch(batch2, enc_key);
     
-    for (int i = 1; i <= 3; ++i) {
+    for (int i = 1025; i <= 1027; ++i) {
         auto res = oram->Read(i, enc_key);
-        assert(res.val_ != nullptr && res.val_.get()[0] == i * 20 && "Key should be updated!");
+        if (res.val_ == nullptr || res.val_.get()[0] != ((i % 255) + 20)) {
+            std::cerr << "Mismatch at Key " << i << " after update!\n";
+            assert(false);
+        }
     }
     
     // 3. Batch Delete to trigger scale down
     std::vector<dyno::dynamic_stepping_path_oram::ORam::BatchOperation> batch3;
-    for (int i = 1; i <= 515; ++i) {
+    for (int i = 1025; i <= 1539; ++i) {
         dyno::dynamic_stepping_path_oram::ORam::BatchOperation op;
         op.type = dyno::dynamic_stepping_path_oram::ORam::OpType::Delete;
         op.key = i;
@@ -380,18 +388,20 @@ void TestORamDeterministicScale() {
     std::cout << "  [Test] Executing Scale-Down Batch (515 Deletes)...\n";
     oram->ExecuteBatch(batch3, enc_key);
     
-    for (int i = 1; i <= 515; ++i) {
+    for (int i = 1025; i <= 1539; ++i) {
         auto res = oram->Read(i, enc_key);
-        assert((res.val_ == nullptr || res.val_.get()[0] == 0) && "Key should be deleted after scale down!");
+        if (res.val_ != nullptr && res.val_.get()[0] != 0) {
+            std::cerr << "Key " << i << " should have been deleted after scale down!\n";
+            assert(false);
+        }
     }
     
     auto res516 = oram->Read(516, enc_key);
     assert((res516.val_ == nullptr || res516.val_.get()[0] == 0) && "Key 516 never existed!");
     
-    // 4. Batch Mixed Ops (Deterministic Collapse Edge Cases)
+    // 4. Edge-case collapses
     std::vector<dyno::dynamic_stepping_path_oram::ORam::BatchOperation> batch4;
-    
-    auto add_op = [&batch4](dyno::dynamic_stepping_path_oram::ORam::OpType type, uint64_t key, uint8_t val = 0) {
+    auto make_op = [](dyno::dynamic_stepping_path_oram::ORam::OpType type, uint64_t key, uint8_t val) {
         dyno::dynamic_stepping_path_oram::ORam::BatchOperation op;
         op.type = type;
         op.key = key;
@@ -399,7 +409,15 @@ void TestORamDeterministicScale() {
             op.val = std::make_unique<uint8_t[]>(8);
             std::memset(op.val.get(), val, 8);
         }
-        batch4.push_back(std::move(op));
+        return op;
+    };
+    batch4.push_back(make_op(dyno::dynamic_stepping_path_oram::ORam::OpType::Delete, 2000, 0)); // Non-existent
+    batch4.push_back(make_op(dyno::dynamic_stepping_path_oram::ORam::OpType::Insert, 1540, 100)); // Insert 1540
+    batch4.push_back(make_op(dyno::dynamic_stepping_path_oram::ORam::OpType::Update, 1540, 200)); // Update 1540
+    batch4.push_back(make_op(dyno::dynamic_stepping_path_oram::ORam::OpType::Search, 1540, 0)); // Search 1540
+    
+    auto add_op = [&batch4](dyno::dynamic_stepping_path_oram::ORam::OpType type, uint64_t key, uint8_t val = 0) {
+        batch4.push_back(make_op(type, key, val));
     };
     
     // Key 1000: Insert(10) -> Update(11) -> Search (Should return 11)
@@ -434,12 +452,21 @@ void TestORamDeterministicScale() {
     std::cout << "  [Test] Executing Edge-Case Mixed Batch...\n";
     oram->ExecuteBatch(batch4, enc_key);
     
+    assert(batch4[3].val != nullptr);
+    assert(batch4[3].val.get()[0] == 200); // the search should find the updated value
+    
+    auto res1540 = oram->Read(1540, enc_key);
+    if (res1540.val_ == nullptr || res1540.val_.get()[0] != 200) {
+        std::cerr << "Key 1540 should be present after edge case batch!\n";
+        assert(false);
+    }
+    
     // Check in-batch Search returns
-    assert(batch4[2].val != nullptr && batch4[2].val.get()[0] == 11 && "Key 1000 Search should return 11!");
-    assert((batch4[5].val == nullptr || batch4[5].val.get()[0] == 0) && "Key 1001 Search should return null!");
-    assert(batch4[7].val != nullptr && batch4[7].val.get()[0] == 10 && "Key 1002 Search should return 10!");
-    assert(batch4[10].val != nullptr && batch4[10].val.get()[0] == 11 && "Key 1003 Search should return 11!");
-    assert(batch4[13].val != nullptr && batch4[13].val.get()[0] == 10 && "Key 1004 Search should return 10!");
+    assert(batch4[6].val != nullptr && batch4[6].val.get()[0] == 11 && "Key 1000 Search should return 11!");
+    assert((batch4[9].val == nullptr || batch4[9].val.get()[0] == 0) && "Key 1001 Search should return null!");
+    assert(batch4[11].val != nullptr && batch4[11].val.get()[0] == 10 && "Key 1002 Search should return 10!");
+    assert(batch4[14].val != nullptr && batch4[14].val.get()[0] == 11 && "Key 1003 Search should return 11!");
+    assert(batch4[17].val != nullptr && batch4[17].val.get()[0] == 10 && "Key 1004 Search should return 10!");
     
     // Check final state in ORAM
     auto res1000 = oram->Read(1000, enc_key); assert(res1000.val_ != nullptr && res1000.val_.get()[0] == 11);
