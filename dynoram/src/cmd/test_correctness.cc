@@ -329,12 +329,12 @@ void TestORamDeterministicScale() {
     std::cout << "Testing DYNO+SONIC Deterministic Scaling (Phase 4 & 5)...\n";
     auto enc_key = GenerateKey();
     
-    // Start with small capacity (2^10 = 1024)
-    auto oram = std::make_unique<dyno::dynamic_stepping_path_oram::ORam>(10, 8); 
+    // Start with small capacity (2^9 = 512)
+    auto oram = std::make_unique<dyno::dynamic_stepping_path_oram::ORam>(9, 8); 
     
     // 1. Batch Insert to trigger scale up
     std::vector<dyno::dynamic_stepping_path_oram::ORam::BatchOperation> batch1;
-    for (int i = 1025; i <= 1539; ++i) {
+    for (int i = 1; i <= 515; ++i) {
         dyno::dynamic_stepping_path_oram::ORam::BatchOperation op;
         op.type = dyno::dynamic_stepping_path_oram::ORam::OpType::Insert;
         op.key = i;
@@ -346,7 +346,7 @@ void TestORamDeterministicScale() {
     std::cout << "  [Test] Executing Scale-Up Batch (515 Inserts)...\n";
     oram->ExecuteBatch(batch1, enc_key);
     
-    for (int i = 1025; i <= 1539; ++i) {
+    for (int i = 1; i <= 515; ++i) {
         auto res = oram->Read(i, enc_key);
         if (res.val_ == nullptr || res.val_.get()[0] != (i % 255)) {
             std::cerr << "Mismatch at Key " << i << " after scale up!\n";
@@ -356,7 +356,7 @@ void TestORamDeterministicScale() {
     
     // 2. Batch Update to trigger normal Phase 4 transfer
     std::vector<dyno::dynamic_stepping_path_oram::ORam::BatchOperation> batch2;
-    for (int i = 1025; i <= 1027; ++i) {
+    for (int i = 1; i <= 3; ++i) {
         dyno::dynamic_stepping_path_oram::ORam::BatchOperation op;
         op.type = dyno::dynamic_stepping_path_oram::ORam::OpType::Update;
         op.key = i;
@@ -378,7 +378,7 @@ void TestORamDeterministicScale() {
     
     // 3. Batch Delete to trigger scale down
     std::vector<dyno::dynamic_stepping_path_oram::ORam::BatchOperation> batch3;
-    for (int i = 1025; i <= 1539; ++i) {
+    for (int i = 1; i <= 515; ++i) {
         dyno::dynamic_stepping_path_oram::ORam::BatchOperation op;
         op.type = dyno::dynamic_stepping_path_oram::ORam::OpType::Delete;
         op.key = i;
@@ -388,7 +388,7 @@ void TestORamDeterministicScale() {
     std::cout << "  [Test] Executing Scale-Down Batch (515 Deletes)...\n";
     oram->ExecuteBatch(batch3, enc_key);
     
-    for (int i = 1025; i <= 1539; ++i) {
+    for (int i = 1; i <= 515; ++i) {
         auto res = oram->Read(i, enc_key);
         if (res.val_ != nullptr && res.val_.get()[0] != 0) {
             std::cerr << "Key " << i << " should have been deleted after scale down!\n";
