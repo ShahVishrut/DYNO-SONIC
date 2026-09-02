@@ -147,7 +147,7 @@ static_path_oram::Block SonicORamAdapter::ReadAndRemove(static_path_oram::Pos p,
   }
 
   sn::oram::access_request req;
-  req.address = sn::obliv::ct_select<uint64_t>(k - 1, UINT64_MAX, is_real);
+  req.address = sn::obliv::ct_select<uint64_t>(k - 1, 0, is_real);
   req.cur_leaf = cur_leaf;
   req.new_leaf = new_leaf;
   req.is_write = false; 
@@ -199,7 +199,7 @@ static_path_oram::Block SonicORamAdapter::Read(static_path_oram::Pos p, static_p
   }
 
   sn::oram::access_request req;
-  req.address = sn::obliv::ct_select<uint64_t>(k - 1, UINT64_MAX, is_real);
+  req.address = sn::obliv::ct_select<uint64_t>(k - 1, 0, is_real);
   req.cur_leaf = cur_leaf;
   req.new_leaf = new_leaf;
   req.is_write = false; 
@@ -273,7 +273,7 @@ void SonicORamAdapter::Insert(static_path_oram::Block block, crypto::Key enc_key
   }
   
   sn::oram::access_request req;
-  req.address = sn::obliv::ct_select<uint64_t>(k - 1, UINT64_MAX, real);
+  req.address = sn::obliv::ct_select<uint64_t>(k - 1, 0, real);
   req.cur_leaf = cur_leaf;
   req.new_leaf = write_leaf;
   req.is_write = sn::obliv::ct_select<bool>(true, false, real); 
@@ -720,7 +720,7 @@ void SonicORamAdapter::InsertBatch(std::vector<static_path_oram::Block>& blocks,
                           impl_->client->insert(new_block);
                       } else {
                           sn::oram::access_request req;
-                          req.address = sn::obliv::ct_select<uint64_t>(k - 1, UINT64_MAX, real);
+                          req.address = sn::obliv::ct_select<uint64_t>(k - 1, 0, real);
                           req.cur_leaf = batch_cur_leaves[j];
                           req.new_leaf = batch_new_leaves[j];
                           req.is_write = sn::obliv::ct_select<bool>(true, false, real);
