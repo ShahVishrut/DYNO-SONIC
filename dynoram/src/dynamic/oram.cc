@@ -568,104 +568,111 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
   // Phase 5: Cascading Resizing & Secondary Transfer
   if (scale_up) {
     int64_t old_y = sub_orams_[1]->Capacity();
-    sub_orams_[0] = std::move(sub_orams_[1]);
-    sub_orams_[1] = std::make_unique<PORam>(2 * old_y, val_len_, true);
-    
-    int64_t C = sub_orams_[0]->Capacity(); // Old large capacity (y)
+    int64_t C = old_y; // Old large capacity (y)
     int64_t total_elements = capacity_;
     int64_t excess = std::max<int64_t>(0, total_elements - C);
     int64_t k_sec = 2 * excess;
     
+    std::vector<static_path_oram::Block> Buffer;
+    
     if (k_sec > 0) {
         int64_t T_sec = k_sec;
         int64_t T_sec_pow2 = 1;
         while (T_sec_pow2 < T_sec) T_sec_pow2 *= 2;
 
-        std::vector<Key> S_extracted = sub_orams_[0]->ObliviousExtractValidKeys(k_sec, T_sec);
-        std::vector<std::pair<Key, bool>> S_keys;
+        std::vector<Key> extracted = sub_orams_[1]->ObliviousExtractValidKeys(k_sec, T_sec);
+        std::vector<std::pair<Key, bool>> keys;
         for (int64_t i = 0; i < T_sec; ++i) {
-            S_keys.push_back({S_extracted[i], S_extracted[i] != 0});
+            keys.push_back({extracted[i], extracted[i] != 0});
         }
         
-        auto BufferS = sub_orams_[0]->ReadAndRemoveBatch(S_keys, enc_key);
+        Buffer = sub_orams_[1]->ReadAndRemoveBatch(keys, enc_key);
         
         for (uint64_t i = T_sec; i < T_sec_pow2; ++i) {
-            BufferS.emplace_back(true);
+            Buffer.emplace_back(true);
             if (val_len_ > 0) {
-                BufferS.back().val_ = std::make_unique<uint8_t[]>(val_len_);
-                std::fill(BufferS.back().val_.get(), BufferS.back().val_.get() + val_len_, 0);
+                Buffer.back().val_ = std::make_unique<uint8_t[]>(val_len_);
+                std::fill(Buffer.back().val_.get(), Buffer.back().val_.get() + val_len_, 0);
             }
         }
         
-        // Translate physical keys back to logical keys BEFORE swapping
+        // Translate physical keys back to logical keys BEFORE swapping (using old mappings)
         for (uint64_t i = 0; i < T_sec; ++i) {
-            if (BufferS[i].meta_.key_ != 0) {
-                // BufferS comes from new small (was old large).
-                // Wait! To reconstruct from the NEW small (which was old large), 
-                // we should use ReconstructLogicalKeySmallOblivious!
-                // Because its physical mapping is now Small!
-                BufferS[i].meta_.key_ = ReconstructLogicalKeySmallOblivious(BufferS[i].meta_.key_);
+            if (Buffer[i].meta_.key_ != 0) {
+                Buffer[i].meta_.key_ = ReconstructLogicalKeyLargeOblivious(Buffer[i].meta_.key_);
             }
         }
         
-        OCompact(BufferS, 0, T_sec_pow2, val_len_);
-        BufferS.erase(BufferS.begin() + T_sec, BufferS.end());
-        
+        OCompact(Buffer, 0, T_sec_pow2, val_len_);
+        Buffer.erase(Buffer.begin() + T_sec, Buffer.end());
+    }
+    
+    // NOW do the cascading resize
+    sub_orams_[0] = std::move(sub_orams_[1]);
+    sub_orams_[1] = std::make_unique<PORam>(2 * old_y, val_len_, true);
+    std::swap(ptr_S_, ptr_L_);
+    
+    // NOW insert the buffer into the NEW large
+    if (k_sec > 0) {
         // Translate logical keys back to physical keys for destination AFTER swapping
-        for (uint64_t i = 0; i < T_sec; ++i) {
-            if (BufferS[i].meta_.key_ != 0) BufferS[i].meta_.key_ = PhysicalKey(BufferS[i].meta_.key_, 1);
+        for (uint64_t i = 0; i < Buffer.size(); ++i) {
+            if (Buffer[i].meta_.key_ != 0) Buffer[i].meta_.key_ = PhysicalKey(Buffer[i].meta_.key_, 1);
         }
-        
-        sub_orams_[1]->InsertBatch(BufferS, enc_key);
+        sub_orams_[1]->InsertBatch(Buffer, enc_key);
     }
   } else if (scale_down) {
     int64_t old_x = sub_orams_[0]->Capacity();
-    sub_orams_[1] = std::move(sub_orams_[0]);
-    sub_orams_[0] = std::make_unique<PORam>(old_x / 2, val_len_, true);
-    
-    int64_t C = sub_orams_[1]->Capacity(); // Old small capacity (x)
+    int64_t C = old_x; // Old small capacity (x)
     int64_t total_elements = capacity_;
     int64_t deficit = std::max<int64_t>(0, C - total_elements);
     int64_t k_sec = deficit;
     
+    std::vector<static_path_oram::Block> Buffer;
+    
     if (k_sec > 0) {
         int64_t T_sec = k_sec;
         int64_t T_sec_pow2 = 1;
         while (T_sec_pow2 < T_sec) T_sec_pow2 *= 2;
 
-        std::vector<Key> L_extracted = sub_orams_[1]->ObliviousExtractValidKeys(k_sec, T_sec);
-        std::vector<std::pair<Key, bool>> L_keys;
+        std::vector<Key> extracted = sub_orams_[0]->ObliviousExtractValidKeys(k_sec, T_sec);
+        std::vector<std::pair<Key, bool>> keys;
         for (int64_t i = 0; i < T_sec; ++i) {
-            L_keys.push_back({L_extracted[i], L_extracted[i] != 0});
+            keys.push_back({extracted[i], extracted[i] != 0});
         }
         
-        auto BufferL = sub_orams_[1]->ReadAndRemoveBatch(L_keys, enc_key);
+        Buffer = sub_orams_[0]->ReadAndRemoveBatch(keys, enc_key);
         
         for (uint64_t i = T_sec; i < T_sec_pow2; ++i) {
-            BufferL.emplace_back(true);
+            Buffer.emplace_back(true);
             if (val_len_ > 0) {
-                BufferL.back().val_ = std::make_unique<uint8_t[]>(val_len_);
-                std::fill(BufferL.back().val_.get(), BufferL.back().val_.get() + val_len_, 0);
+                Buffer.back().val_ = std::make_unique<uint8_t[]>(val_len_);
+                std::fill(Buffer.back().val_.get(), Buffer.back().val_.get() + val_len_, 0);
             }
         }
         
         // Translate physical keys back to logical keys BEFORE swapping
         for (uint64_t i = 0; i < T_sec; ++i) {
-            if (BufferL[i].meta_.key_ != 0) {
-                // BufferL comes from new large (was old small).
-                BufferL[i].meta_.key_ = ReconstructLogicalKeyLargeOblivious(BufferL[i].meta_.key_);
+            if (Buffer[i].meta_.key_ != 0) {
+                Buffer[i].meta_.key_ = ReconstructLogicalKeySmallOblivious(Buffer[i].meta_.key_);
             }
         }
         
-        OCompact(BufferL, 0, T_sec_pow2, val_len_);
-        BufferL.erase(BufferL.begin() + T_sec, BufferL.end());
-        
+        OCompact(Buffer, 0, T_sec_pow2, val_len_);
+        Buffer.erase(Buffer.begin() + T_sec, Buffer.end());
+    }
+    
+    // NOW do the cascading resize
+    sub_orams_[1] = std::move(sub_orams_[0]);
+    sub_orams_[0] = std::make_unique<PORam>(old_x / 2, val_len_, true);
+    std::swap(ptr_S_, ptr_L_);
+    
+    // NOW insert the buffer into the NEW small
+    if (k_sec > 0) {
         // Translate logical keys back to physical keys for destination AFTER swapping
-        for (uint64_t i = 0; i < T_sec; ++i) {
-            if (BufferL[i].meta_.key_ != 0) BufferL[i].meta_.key_ = PhysicalKey(BufferL[i].meta_.key_, 0);
+        for (uint64_t i = 0; i < Buffer.size(); ++i) {
+            if (Buffer[i].meta_.key_ != 0) Buffer[i].meta_.key_ = PhysicalKey(Buffer[i].meta_.key_, 0);
         }
-        
-        sub_orams_[0]->InsertBatch(BufferL, enc_key);
+        sub_orams_[0]->InsertBatch(Buffer, enc_key);
     }
   }
 }
