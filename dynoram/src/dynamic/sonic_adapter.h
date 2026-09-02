@@ -27,7 +27,16 @@ class SonicORamAdapter {
   void Insert(static_path_oram::Block block, crypto::Key enc_key, bool is_real = true, bool is_new = false, bool flush = true);
   void FlushEpoch();
 
-  std::vector<static_path_oram::Block> ReadBatch(const std::vector<std::pair<static_path_oram::Key, bool>>& keys_with_real_flags, crypto::Key enc_key, bool steady_state = true);
+  struct AccessOp {
+      static_path_oram::Key key;
+      bool is_real;
+      uint8_t op_type; // 1=Search, 2=Delete, 3=Update
+      std::shared_ptr<uint8_t[]> val; // Only valid if op_type == 3
+  };
+
+  std::vector<static_path_oram::Key> ObliviousExtractValidKeys(size_t k, size_t T);
+
+  std::vector<static_path_oram::Block> ReadBatch(const std::vector<AccessOp>& ops, crypto::Key enc_key, bool steady_state = true);
   std::vector<static_path_oram::Block> ReadAndRemoveBatch(const std::vector<std::pair<static_path_oram::Key, bool>>& keys_with_real_flags, crypto::Key enc_key, bool steady_state = true);
   void InsertBatch(std::vector<static_path_oram::Block>& blocks, crypto::Key enc_key, bool steady_state = true);
   

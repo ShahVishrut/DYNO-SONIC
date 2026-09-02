@@ -339,7 +339,7 @@ std::vector<static_path_oram::Block> SonicORamAdapter::ReadAndRemoveBatch(const 
                       auto& [k, is_real] = keys_with_real_flags[j];
                       bool match = sn::obliv::ct_eq<uint64_t>(pos, k) & is_real;
                       thread_local_leaves[i][j] = sn::obliv::ct_select<uint64_t>(current_pos, thread_local_leaves[i][j], match);
-                      next_pos = sn::obliv::ct_select<uint64_t>(batch_new_leaves[j], next_pos, match);
+                      next_pos = sn::obliv::ct_select<uint64_t>(UINT64_MAX, next_pos, match);
                   }
                   impl_->pos_map[pos] = next_pos;
               }
@@ -445,8 +445,23 @@ std::vector<static_path_oram::Block> SonicORamAdapter::ReadAndRemoveBatch(const 
   return results;
 }
 
-std::vector<static_path_oram::Block> SonicORamAdapter::ReadBatch(const std::vector<std::pair<static_path_oram::Key, bool>>& keys_with_real_flags, crypto::Key enc_key, bool steady_state) {
-  size_t B = keys_with_real_flags.size();
+std::vector<static_path_oram::Key> SonicORamAdapter::ObliviousExtractValidKeys(size_t k, size_t T) {
+  std::vector<static_path_oram::Key> S_keys(T, 0); 
+  uint64_t count = 0;
+  for (uint64_t i = 1; i <= capacity_; ++i) { 
+      bool is_real = (impl_->pos_map[i] != UINT64_MAX);
+      bool take = is_real & (count < k); 
+      for (uint64_t j = 0; j < T; ++j) { 
+          bool match = take & (count == j);
+          S_keys[j] = sn::obliv::ct_select(i, S_keys[j], match); 
+      }
+      count = sn::obliv::ct_select(count + 1, count, take);
+  }
+  return S_keys;
+}
+
+std::vector<static_path_oram::Block> SonicORamAdapter::ReadBatch(const std::vector<AccessOp>& ops, crypto::Key enc_key, bool steady_state) {
+  size_t B = ops.size();
   std::vector<static_path_oram::Block> results;
   results.reserve(B);
   for (size_t i = 0; i < B; ++i) {
@@ -466,15 +481,18 @@ std::vector<static_path_oram::Block> SonicORamAdapter::ReadBatch(const std::vect
       std::vector<std::vector<uint64_t>> thread_local_leaves(num_workers, std::vector<uint64_t>(B, UINT64_MAX));
       
       for (int i = 0; i < num_workers; ++i) {
-          workers.emplace_back([this, i, num_workers, B, &keys_with_real_flags, &batch_new_leaves, &thread_local_leaves]() {
+          workers.emplace_back([this, i, num_workers, B, &ops, &batch_new_leaves, &thread_local_leaves]() {
               for (size_t pos = 1 + i; pos <= capacity_; pos += num_workers) {
                   uint64_t current_pos = impl_->pos_map[pos];
                   uint64_t next_pos = current_pos;
                   for (size_t j = 0; j < B; ++j) {
-                      auto& [k, is_real] = keys_with_real_flags[j];
-                      bool match = sn::obliv::ct_eq<uint64_t>(pos, k) & is_real;
+                      const auto& op = ops[j];
+                      bool match = sn::obliv::ct_eq<uint64_t>(pos, op.key) & op.is_real;
+                      bool is_delete = sn::obliv::ct_eq<uint8_t>(op.op_type, 2);
                       thread_local_leaves[i][j] = sn::obliv::ct_select<uint64_t>(current_pos, thread_local_leaves[i][j], match);
-                      next_pos = sn::obliv::ct_select<uint64_t>(batch_new_leaves[j], next_pos, match);
+                      
+                      uint64_t candidate_next = sn::obliv::ct_select<uint64_t>(UINT64_MAX, batch_new_leaves[j], is_delete);
+                      next_pos = sn::obliv::ct_select<uint64_t>(candidate_next, next_pos, match);
                   }
                   impl_->pos_map[pos] = next_pos;
               }
@@ -493,7 +511,7 @@ std::vector<static_path_oram::Block> SonicORamAdapter::ReadBatch(const std::vect
       }
   } else {
       for (size_t j = 0; j < B; ++j) {
-          batch_cur_leaves[j] = sn::obliv::ct_select<uint64_t>(keys_with_real_flags[j].first - 1, impl_->GenerateLeaf(), keys_with_real_flags[j].second);
+          batch_cur_leaves[j] = sn::obliv::ct_select<uint64_t>(ops[j].key - 1, impl_->GenerateLeaf(), ops[j].is_real);
       }
   }
 
@@ -509,7 +527,7 @@ std::vector<static_path_oram::Block> SonicORamAdapter::ReadBatch(const std::vect
       int tasks_pending = num_workers;
       
       for (int i = 0; i < num_workers; ++i) {
-          g_access_pool->enqueue([this, i, num_workers, chunk_start, chunk_end, &keys_with_real_flags, &batch_cur_leaves, &batch_new_leaves, &results, &thread_access_ops, &ops_mutex, &tasks_pending, &chunk_cv]() {
+          g_access_pool->enqueue([this, i, num_workers, chunk_start, chunk_end, &ops, &batch_cur_leaves, &batch_new_leaves, &results, &thread_access_ops, &ops_mutex, &tasks_pending, &chunk_cv]() {
               try {
                   thread_local SonicClient::access_scratch tl_scratch;
                   thread_local size_t tl_scratch_cap = 0;
@@ -519,15 +537,24 @@ std::vector<static_path_oram::Block> SonicORamAdapter::ReadBatch(const std::vect
                   }
                   uint64_t local_ops = 0;
                   for (size_t j = chunk_start + i; j < chunk_end; j += num_workers) {
-                      auto& [k, is_real] = keys_with_real_flags[j];
+                      const auto& op = ops[j];
                       sn::oram::access_request req;
-                      req.address = sn::obliv::ct_select<uint64_t>(k - 1, UINT64_MAX, is_real);
+                      req.address = sn::obliv::ct_select<uint64_t>(op.key - 1, UINT64_MAX, op.is_real);
                       req.cur_leaf = batch_cur_leaves[j];
                       req.new_leaf = batch_new_leaves[j];
-                      req.is_write = false; 
+                      req.is_write = sn::obliv::ct_eq<uint8_t>(op.op_type, 3); // Update
                       
                       std::vector<uint8_t> in_buf(kSonicBlockBytes, 0);
                       std::vector<uint8_t> out_buf(kSonicBlockBytes, 0);
+                      
+                      if (req.is_write && op.val) {
+                          static_path_oram::BlockMetadata meta;
+                          meta.key_ = op.key;
+                          meta.pos_ = batch_new_leaves[j] + 1;
+                          bytes::ToBytes(meta, in_buf.data());
+                          std::copy(op.val.get(), op.val.get() + val_len_, in_buf.data() + sizeof(static_path_oram::BlockMetadata));
+                      }
+                      
                       req.in = sn::util::span<uint8_t>(in_buf);
                       req.out = sn::util::span<uint8_t>(out_buf);
 
@@ -568,6 +595,12 @@ std::vector<static_path_oram::Block> SonicORamAdapter::ReadBatch(const std::vect
           impl_->client->flush_epoch();
       }
   }
+
+  for (int i = 0; i < num_workers; ++i) {
+      memory_access_count_ += thread_access_ops[i];
+      memory_bytes_moved_total_ += thread_access_ops[i] * kSonicBlockBytes * 2;
+  }
+
   return results;
 }
 

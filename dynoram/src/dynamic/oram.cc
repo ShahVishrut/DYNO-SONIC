@@ -213,12 +213,8 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
   };
 
   size_t original_inserts = 0;
-  size_t original_reads = 0;
-  size_t original_deletes = 0;
   for (auto& op : batch) {
     if (op.type == OpType::Insert) original_inserts++;
-    else if (op.type == OpType::Delete) original_deletes++;
-    else original_reads++;
   }
 
   // Pre-allocate values so we can obliviously swap them in constant time
@@ -232,7 +228,7 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
     Key key;
     uint32_t seq;
     bool is_dummy;
-    uint8_t op_type; // 0=Insert, 1=Search, 2=Delete
+    uint8_t op_type; // 0=Insert, 1=Search, 2=Delete, 3=Update
   };
 
   std::vector<OblivElem> elems(B);
@@ -242,7 +238,8 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
     elems[i].is_dummy = false;
     if (batch[i].type == OpType::Insert) elems[i].op_type = 0;
     else if (batch[i].type == OpType::Search) elems[i].op_type = 1;
-    else elems[i].op_type = 2;
+    else if (batch[i].type == OpType::Delete) elems[i].op_type = 2;
+    else elems[i].op_type = 3; // Update
   }
 
   struct BatchSwapHook {
@@ -279,8 +276,6 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
     return sn::obliv::ct_select(seq_lt, key_lt, key_eq);
   };
   sn::sortshuffle::ser::bitonic::detail::bitonic_sort_impl(elems.data(), B, key_ext, comp1, hook);
-  
-  if (B == 1) std::cout << "[DEBUG] Phase 1 (Bitonic Sort 1) took " << get_ms() << " ms" << std::endl;
 
   // Phase 2: O-Scan (Collapse)
   for (size_t i = 0; i < B - 1; ++i) {
@@ -288,16 +283,20 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
     
     bool is_i_insert = sn::obliv::ct_eq(elems[i].op_type, static_cast<uint8_t>(0));
     bool is_i_delete = sn::obliv::ct_eq(elems[i].op_type, static_cast<uint8_t>(2));
+    bool is_i_update = sn::obliv::ct_eq(elems[i].op_type, static_cast<uint8_t>(3));
     bool is_next_search = sn::obliv::ct_eq(elems[i+1].op_type, static_cast<uint8_t>(1));
     
     bool transform_to_insert = same_key & is_i_insert & is_next_search;
     bool transform_to_delete = same_key & is_i_delete & is_next_search;
+    bool transform_to_update = same_key & is_i_update & is_next_search;
     
     elems[i+1].op_type = sn::obliv::ct_select<uint8_t>(0, elems[i+1].op_type, transform_to_insert);
     elems[i+1].op_type = sn::obliv::ct_select<uint8_t>(2, elems[i+1].op_type, transform_to_delete);
+    elems[i+1].op_type = sn::obliv::ct_select<uint8_t>(3, elems[i+1].op_type, transform_to_update);
     
+    bool do_swap = transform_to_insert | transform_to_update;
     if (val_len_ > 0) {
-        sn::obliv::ct_swap_array(batch[i].val.get(), batch[i+1].val.get(), val_len_, transform_to_insert);
+        sn::obliv::ct_swap_array(batch[i].val.get(), batch[i+1].val.get(), val_len_, do_swap);
     }
     
     sn::obliv::ct_set_ref(elems[i].is_dummy, true, same_key);
@@ -323,8 +322,6 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
   }
 
   // Phase 3: O-Sort (Group by OpType, then Dummy)
-  if (B == 1) std::cout << "[DEBUG] Phase 2 (O-Scan) took " << get_ms() << " ms" << std::endl;
-
   auto comp2 = [](const OblivElem& a, const OblivElem& b) {
     bool type_eq = sn::obliv::ct_eq(a.op_type, b.op_type);
     bool type_lt = sn::obliv::ct_lt(a.op_type, b.op_type);
@@ -340,11 +337,10 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
     return sn::obliv::ct_select(seq_lt, lt_so_far, eq_so_far);
   };
   sn::sortshuffle::ser::bitonic::detail::bitonic_sort_impl(elems.data(), B, key_ext, comp2, hook);
-  if (B == 1) std::cout << "[DEBUG] Phase 3 (Bitonic Sort 2) took " << get_ms() << " ms" << std::endl;
 
   // Dispatch exactly to Public Bounds
   std::vector<Block> inserts;
-  std::vector<std::pair<Key, bool>> small_reads, large_reads;
+  std::vector<SonicORamAdapter::AccessOp> small_ops, large_ops;
 
   for (size_t i = 0; i < original_inserts; ++i) {
     Block b;
@@ -358,18 +354,66 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
     inserts.push_back(std::move(b));
   }
 
-  for (size_t i = original_inserts; i < B; ++i) {
+  for (size_t i = 0; i < B; ++i) {
     Key k = batch[i].key;
     bool is_real = !elems[i].is_dummy;
     uint8_t idx = SubOramIndex(k);
-    small_reads.push_back({k, is_real && (idx == 0)});
-    large_reads.push_back({k, is_real && (idx == 1)});
+    uint8_t op_type = elems[i].op_type;
+    
+    bool is_search = sn::obliv::ct_eq(op_type, static_cast<uint8_t>(1));
+    bool is_delete = sn::obliv::ct_eq(op_type, static_cast<uint8_t>(2));
+    bool is_update = sn::obliv::ct_eq(op_type, static_cast<uint8_t>(3));
+    
+    bool is_access = is_search || is_delete || is_update;
+    
+    SonicORamAdapter::AccessOp op;
+    op.key = k;
+    op.op_type = op_type;
+    if (batch[i].val) {
+      op.val = std::make_unique<uint8_t[]>(val_len_);
+      std::copy(batch[i].val.get(), batch[i].val.get() + val_len_, op.val.get());
+    }
+    
+    op.is_real = is_real && is_access && (idx == 0);
+    small_ops.push_back(std::move(op));
+
+    SonicORamAdapter::AccessOp op_l;
+    op_l.key = k;
+    op_l.op_type = op_type;
+    if (batch[i].val) {
+      op_l.val = std::make_unique<uint8_t[]>(val_len_);
+      std::copy(batch[i].val.get(), batch[i].val.get() + val_len_, op_l.val.get());
+    }
+    op_l.is_real = is_real && is_access && (idx == 1);
+    large_ops.push_back(std::move(op_l));
   }
 
-  if (sub_orams_[0]) sub_orams_[0]->ReadBatch(small_reads, enc_key, steady_state);
-  if (sub_orams_[1]) sub_orams_[1]->ReadBatch(large_reads, enc_key, steady_state);
-
-  if (B == 1) std::cout << "[DEBUG] Phase 3.5 (ReadBatch) took " << get_ms() << " ms" << std::endl;
+  if (sub_orams_[0]) {
+      auto read_results = sub_orams_[0]->ReadBatch(small_ops, enc_key, steady_state);
+      // Copy read results back to batch for Search operations
+      for (size_t i = 0; i < B; ++i) {
+          if (small_ops[i].is_real && sn::obliv::ct_eq(small_ops[i].op_type, static_cast<uint8_t>(1))) {
+              batch[i].result.key_ = read_results[i].meta_.key_;
+              if (read_results[i].val_) {
+                  batch[i].result.val_ = std::make_unique<uint8_t[]>(val_len_);
+                  std::copy(read_results[i].val_.get(), read_results[i].val_.get() + val_len_, batch[i].result.val_.get());
+              }
+          }
+      }
+  }
+  if (sub_orams_[1]) {
+      auto read_results = sub_orams_[1]->ReadBatch(large_ops, enc_key, steady_state);
+      // Copy read results back to batch for Search operations
+      for (size_t i = 0; i < B; ++i) {
+          if (large_ops[i].is_real && sn::obliv::ct_eq(large_ops[i].op_type, static_cast<uint8_t>(1))) {
+              batch[i].result.key_ = read_results[i].meta_.key_;
+              if (read_results[i].val_) {
+                  batch[i].result.val_ = std::make_unique<uint8_t[]>(val_len_);
+                  std::copy(read_results[i].val_.get(), read_results[i].val_.get() + val_len_, batch[i].result.val_.get());
+              }
+          }
+      }
+  }
 
   if (sub_orams_[1]) {
     std::vector<static_path_oram::Block> sn_inserts;
@@ -382,8 +426,6 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
     }
     sub_orams_[1]->InsertBatch(sn_inserts, enc_key, steady_state);
   }
-  
-  if (B == 1) std::cout << "[DEBUG] Phase 3.6 (InsertBatch Original) took " << get_ms() << " ms" << std::endl;
 
   // Phase 4: Oblivious Net Growth & Boundary Checking
   int64_t a = real_I - real_DS - real_DL;
@@ -418,12 +460,13 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
     int64_t T_pow2 = 1;
     while (T_pow2 < T) T_pow2 *= 2;
 
-    // 2. Deterministic Batch Extraction into Enclave
-    std::vector<std::pair<Key, bool>> S_keys;
-    std::vector<std::pair<Key, bool>> L_keys;
+    std::vector<Key> S_extracted = sub_orams_[0]->ObliviousExtractValidKeys(std::max<int64_t>(0, k_transfer), T);
+    std::vector<Key> L_extracted = sub_orams_[1]->ObliviousExtractValidKeys(std::max<int64_t>(0, -k_transfer), T);
+
+    std::vector<std::pair<Key, bool>> S_keys, L_keys;
     for (int64_t i = 0; i < T; ++i) {
-        S_keys.push_back({(ptr_S_ + i) % sub_orams_[0]->Capacity() + 1, true});
-        L_keys.push_back({(ptr_L_ + i) % sub_orams_[1]->Capacity() + 1, true});
+        S_keys.push_back({S_extracted[i], S_extracted[i] != 0});
+        L_keys.push_back({L_extracted[i], L_extracted[i] != 0});
     }
 
     auto BufferS = sub_orams_[0]->ReadAndRemoveBatch(S_keys, enc_key);
@@ -459,15 +502,11 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
     BufferS.erase(BufferS.begin() + T, BufferS.end());
     BufferL.erase(BufferL.begin() + T, BufferL.end());
 
-    if (B == 1) std::cout << "[DEBUG] Phase 4 (ReadAndRemove + OCompact + Swap) took " << get_ms() << " ms" << std::endl;
-
     // 5. Flush to Stashes
     sub_orams_[0]->InsertBatch(BufferS, enc_key);
     sub_orams_[1]->InsertBatch(BufferL, enc_key);
 
-    if (B == 1) std::cout << "[DEBUG] Phase 4.5 (InsertBatch Buffers) took " << get_ms() << " ms" << std::endl;
-
-    // 6. Address Translation & SONIC Native Cleanup
+    // 6. Address Translation
     ptr_S_ += std::max(static_cast<int64_t>(0), k_transfer);
     ptr_L_ += std::max(static_cast<int64_t>(0), -k_transfer);
     capacity_ += k_transfer;
@@ -477,12 +516,66 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
   if (scale_up) {
     sub_orams_[0] = std::move(sub_orams_[1]);
     sub_orams_[1] = std::make_unique<PORam>(2 * capacity_, val_len_, true);
+    
+    int64_t target_small_abs = std::abs(target_small);
+    if (target_small_abs > 0) {
+        int64_t k_sec = target_small_abs;
+        int64_t T_sec = target_small_abs;
+        int64_t T_sec_pow2 = 1;
+        while (T_sec_pow2 < T_sec) T_sec_pow2 *= 2;
+
+        std::vector<Key> S_extracted = sub_orams_[0]->ObliviousExtractValidKeys(k_sec, T_sec);
+        std::vector<std::pair<Key, bool>> S_keys;
+        for (int64_t i = 0; i < T_sec; ++i) {
+            S_keys.push_back({S_extracted[i], S_extracted[i] != 0});
+        }
+        
+        auto BufferS = sub_orams_[0]->ReadAndRemoveBatch(S_keys, enc_key);
+        
+        for (uint64_t i = T_sec; i < T_sec_pow2; ++i) {
+            BufferS.emplace_back(true);
+            if (val_len_ > 0) {
+                BufferS.back().val_ = std::make_unique<uint8_t[]>(val_len_);
+                std::fill(BufferS.back().val_.get(), BufferS.back().val_.get() + val_len_, 0);
+            }
+        }
+        OCompact(BufferS, 0, T_sec_pow2, val_len_);
+        BufferS.erase(BufferS.begin() + T_sec, BufferS.end());
+        
+        sub_orams_[1]->InsertBatch(BufferS, enc_key);
+    }
   } else if (scale_down) {
     sub_orams_[1] = std::move(sub_orams_[0]);
     sub_orams_[0] = std::make_unique<PORam>(capacity_ / 2, val_len_, true);
+    
+    int64_t target_large_abs = std::abs(target_large);
+    if (target_large_abs > 0) {
+        int64_t k_sec = target_large_abs;
+        int64_t T_sec = target_large_abs;
+        int64_t T_sec_pow2 = 1;
+        while (T_sec_pow2 < T_sec) T_sec_pow2 *= 2;
+
+        std::vector<Key> L_extracted = sub_orams_[1]->ObliviousExtractValidKeys(k_sec, T_sec);
+        std::vector<std::pair<Key, bool>> L_keys;
+        for (int64_t i = 0; i < T_sec; ++i) {
+            L_keys.push_back({L_extracted[i], L_extracted[i] != 0});
+        }
+        
+        auto BufferL = sub_orams_[1]->ReadAndRemoveBatch(L_keys, enc_key);
+        
+        for (uint64_t i = T_sec; i < T_sec_pow2; ++i) {
+            BufferL.emplace_back(true);
+            if (val_len_ > 0) {
+                BufferL.back().val_ = std::make_unique<uint8_t[]>(val_len_);
+                std::fill(BufferL.back().val_.get(), BufferL.back().val_.get() + val_len_, 0);
+            }
+        }
+        OCompact(BufferL, 0, T_sec_pow2, val_len_);
+        BufferL.erase(BufferL.begin() + T_sec, BufferL.end());
+        
+        sub_orams_[0]->InsertBatch(BufferL, enc_key);
+    }
   }
-  
-  if (B == 1) std::cout << "[DEBUG] Phase 5 (Scaling) took " << get_ms() << " ms" << std::endl;
 }
 
 } // namespace dyno::dynamic_stepping_path_oram

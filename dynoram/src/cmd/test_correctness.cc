@@ -264,7 +264,12 @@ void TestORamComprehensiveMixedWorkload() {
         
         if (op_rand < 30) {
             // Insert or Update
-            op.type = dyno::dynamic_stepping_path_oram::ORam::OpType::Insert;
+            bool exists = shadow_state.count(op.key) > 0;
+            if (exists) {
+                op.type = dyno::dynamic_stepping_path_oram::ORam::OpType::Update;
+            } else {
+                op.type = dyno::dynamic_stepping_path_oram::ORam::OpType::Insert;
+            }
             op.val = std::make_unique<uint8_t[]>(8);
             uint64_t v = dist_val(rng);
             std::memcpy(op.val.get(), &v, 8);
@@ -275,7 +280,7 @@ void TestORamComprehensiveMixedWorkload() {
             // shadow state remains same
         } else {
             // Delete (in Block ORAM, we delete a key by overwriting it with zeroes)
-            op.type = dyno::dynamic_stepping_path_oram::ORam::OpType::Insert;
+            op.type = dyno::dynamic_stepping_path_oram::ORam::OpType::Delete;
             op.val = std::make_unique<uint8_t[]>(8);
             uint64_t v = 0;
             std::memcpy(op.val.get(), &v, 8);
@@ -318,7 +323,76 @@ void TestORamComprehensiveMixedWorkload() {
     std::cout << "ORam Comprehensive Mixed Workload test passed!\n";
 }
 
+void TestORamDeterministicScale() {
+    std::cout << "Testing DYNO+SONIC Deterministic Scaling (Phase 4 & 5)...\n";
+    auto enc_key = GenerateKey();
+    
+    // Start with small capacity
+    auto oram = std::make_unique<dyno::dynamic_stepping_path_oram::ORam>(4, 8); 
+    
+    // 1. Batch Insert to trigger scale up
+    std::vector<dyno::dynamic_stepping_path_oram::ORam::BatchOperation> batch1;
+    for (int i = 1; i <= 6; ++i) {
+        dyno::dynamic_stepping_path_oram::ORam::BatchOperation op;
+        op.type = dyno::dynamic_stepping_path_oram::ORam::OpType::Insert;
+        op.key = i;
+        op.val = std::make_unique<uint8_t[]>(8);
+        std::memset(op.val.get(), i * 10, 8);
+        batch1.push_back(std::move(op));
+    }
+    
+    std::cout << "  [Test] Executing Scale-Up Batch (6 Inserts)...\n";
+    oram->ExecuteBatch(batch1, enc_key);
+    
+    for (int i = 1; i <= 6; ++i) {
+        auto res = oram->Read(i, enc_key);
+        assert(res.val_ != nullptr && res.val_.get()[0] == i * 10 && "Key should be present after scale up!");
+    }
+    
+    // 2. Batch Update to trigger normal Phase 4 transfer
+    std::vector<dyno::dynamic_stepping_path_oram::ORam::BatchOperation> batch2;
+    for (int i = 1; i <= 3; ++i) {
+        dyno::dynamic_stepping_path_oram::ORam::BatchOperation op;
+        op.type = dyno::dynamic_stepping_path_oram::ORam::OpType::Update;
+        op.key = i;
+        op.val = std::make_unique<uint8_t[]>(8);
+        std::memset(op.val.get(), i * 20, 8);
+        batch2.push_back(std::move(op));
+    }
+    
+    std::cout << "  [Test] Executing Update Batch (3 Updates)...\n";
+    oram->ExecuteBatch(batch2, enc_key);
+    
+    for (int i = 1; i <= 3; ++i) {
+        auto res = oram->Read(i, enc_key);
+        assert(res.val_ != nullptr && res.val_.get()[0] == i * 20 && "Key should be updated!");
+    }
+    
+    // 3. Batch Delete to trigger scale down
+    std::vector<dyno::dynamic_stepping_path_oram::ORam::BatchOperation> batch3;
+    for (int i = 1; i <= 5; ++i) {
+        dyno::dynamic_stepping_path_oram::ORam::BatchOperation op;
+        op.type = dyno::dynamic_stepping_path_oram::ORam::OpType::Delete;
+        op.key = i;
+        batch3.push_back(std::move(op));
+    }
+    
+    std::cout << "  [Test] Executing Scale-Down Batch (5 Deletes)...\n";
+    oram->ExecuteBatch(batch3, enc_key);
+    
+    for (int i = 1; i <= 5; ++i) {
+        auto res = oram->Read(i, enc_key);
+        assert((res.val_ == nullptr || res.val_.get()[0] == 0) && "Key should be deleted after scale down!");
+    }
+    
+    auto res6 = oram->Read(6, enc_key);
+    assert(res6.val_ != nullptr && res6.val_.get()[0] == 60 && "Key 6 should still remain!");
+    
+    std::cout << "ORam Deterministic Scaling test passed!\n\n";
+}
+
 int main() {
+    TestORamDeterministicScale();
     TestORamComprehensiveMixedWorkload();
     TestOMap();
     TestOHeap();
