@@ -443,7 +443,7 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
       std::cout << "[DEBUG] Phase 2: large sub_oram ReadBatch" << std::endl;
       auto read_results = sub_orams_[1]->ReadBatch(large_ops, enc_key, steady_state);
       std::cout << "[DEBUG] Phase 2: large sub_oram ReadBatch done" << std::endl;
-      // Copy read results back to batch for Search operations
+      std::cout << "[DEBUG] Post-Phase 2: large_ops processing start" << std::endl;
       for (size_t i = 0; i < B; ++i) {
           if (large_ops[i].is_real && sn::obliv::ct_eq(large_ops[i].op_type, static_cast<uint8_t>(1))) {
               batch[i].result.key_ = read_results[i].meta_.key_;
@@ -453,9 +453,11 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
               }
           }
       }
+      std::cout << "[DEBUG] Post-Phase 2: large_ops processing end" << std::endl;
   }
 
   if (sub_orams_[1]) {
+    std::cout << "[DEBUG] Pre-Phase 3: sn_inserts populating" << std::endl;
     std::vector<static_path_oram::Block> sn_inserts;
     for (auto& b : inserts) {
         uint64_t phys_k = PhysicalKey(b.key_, 1);
@@ -465,6 +467,7 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
         }
         sn_inserts.push_back(std::move(new_b));
     }
+    std::cout << "[DEBUG] Pre-Phase 3: sn_inserts populated" << std::endl;
     std::cout << "[DEBUG] Phase 3: large sub_oram InsertBatch" << std::endl;
     sub_orams_[1]->InsertBatch(sn_inserts, enc_key, steady_state);
     std::cout << "[DEBUG] Phase 3: large sub_oram InsertBatch done" << std::endl;
