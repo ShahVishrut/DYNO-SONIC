@@ -397,10 +397,6 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
   std::vector<Block> inserts;
   std::vector<SonicORamAdapter::AccessOp> small_ops, large_ops;
 
-  if (size_ + original_inserts > capacity_) {
-    steady_state = false;
-  }
-
   for (size_t i = 0; i < original_inserts; ++i) {
     Block b;
     bool is_real = !elems[i].is_dummy;
