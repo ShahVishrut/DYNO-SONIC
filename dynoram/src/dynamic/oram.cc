@@ -625,20 +625,18 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
     int64_t excess = std::max<int64_t>(0, static_cast<int64_t>(capacity_) - old_y);
     int64_t k_sec = 2 * excess;
 
+    uint64_t old_ptr_S = ptr_L_; // old_ptr_L becomes the base for new S
+
     sub_orams_[0] = std::move(sub_orams_[1]);
     sub_orams_[1] = std::make_unique<PORam>(2 * old_y, val_len_, true);
     std::swap(ptr_S_, ptr_L_);
     ptr_S_ += k_sec; // Advance ptr_S_ to maintain the N-j and 2j invariant!
     
-    // Now extract any keys from the new ORAM S that logically belong to the new ORAM L.
-    // Since we are okay leaking the operation type during scaling (per user), we can do this non-obliviously.
     std::vector<std::pair<Key, bool>> keys_to_move;
-    auto s_keys = sub_orams_[0]->GetAllValidKeys(); // Custom helper to get all keys
-    for (Key phys_k : s_keys) {
-        Key log_k = ReconstructLogicalKeySmallOblivious(phys_k);
-        if (SubOramIndex(log_k) == 1) { // Logically belongs to new L
-            keys_to_move.push_back({phys_k, true});
-        }
+    for (uint64_t i = 1; i <= static_cast<uint64_t>(k_sec); ++i) {
+        Key log_k = old_ptr_S + i;
+        Key phys_k = PhysicalKey(log_k, 0); // They are currently in the new S
+        keys_to_move.push_back({phys_k, true});
     }
     
     if (!keys_to_move.empty()) {
@@ -646,10 +644,11 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
         auto extracted_blocks = sub_orams_[0]->ReadAndRemoveBatch(keys_to_move, enc_key);
         
         // Translate back to logical, then to L's physical keys
-        for (auto& b : extracted_blocks) {
+        for (size_t i = 0; i < extracted_blocks.size(); ++i) {
+            auto& b = extracted_blocks[i];
             if (b.meta_.key_ != 0) {
-                b.meta_.key_ = ReconstructLogicalKeySmallOblivious(b.meta_.key_);
-                b.meta_.key_ = PhysicalKey(b.meta_.key_, 1);
+                Key log_k = old_ptr_S + i + 1; // Uniquely known
+                b.meta_.key_ = PhysicalKey(log_k, 1);
             }
         }
         sub_orams_[1]->InsertBatch(extracted_blocks, enc_key, true);
@@ -664,12 +663,10 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
     ptr_S_ -= k_sec; // Shift pointer backwards to absorb deficit
     
     std::vector<std::pair<Key, bool>> keys_to_move;
-    auto l_keys = sub_orams_[1]->GetAllValidKeys(); // Custom helper
-    for (Key phys_k : l_keys) {
-        Key log_k = ReconstructLogicalKeyLargeOblivious(phys_k);
-        if (SubOramIndex(log_k) == 0) { // Logically belongs to new S
-            keys_to_move.push_back({phys_k, true});
-        }
+    for (uint64_t i = 1; i <= static_cast<uint64_t>(k_sec); ++i) {
+        Key log_k = ptr_S_ + i;
+        Key phys_k = PhysicalKey(log_k, 1); // They are currently in the new L
+        keys_to_move.push_back({phys_k, true});
     }
     
     if (!keys_to_move.empty()) {
@@ -677,10 +674,11 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
         auto extracted_blocks = sub_orams_[1]->ReadAndRemoveBatch(keys_to_move, enc_key);
         
         // Translate back to logical, then to S's physical keys
-        for (auto& b : extracted_blocks) {
+        for (size_t i = 0; i < extracted_blocks.size(); ++i) {
+            auto& b = extracted_blocks[i];
             if (b.meta_.key_ != 0) {
-                b.meta_.key_ = ReconstructLogicalKeyLargeOblivious(b.meta_.key_);
-                b.meta_.key_ = PhysicalKey(b.meta_.key_, 0);
+                Key log_k = ptr_S_ + i + 1; // Uniquely known
+                b.meta_.key_ = PhysicalKey(log_k, 0);
             }
         }
         sub_orams_[0]->InsertBatch(extracted_blocks, enc_key, true);
