@@ -179,6 +179,13 @@ static_path_oram::Block SonicORamAdapter::ReadAndRemove(static_path_oram::Pos p,
       std::copy(out_buf.data() + sizeof(static_path_oram::BlockMetadata),
                 out_buf.data() + sizeof(static_path_oram::BlockMetadata) + val_len_,
                 res.val_.get());
+      if (is_real && k <= 20) {
+          std::cout << "[DEBUG] SonicRead k=" << k << " out_buf[0..23]=";
+          for (int db = 0; db < 24 && db < (int)kSonicBlockBytes; ++db) {
+              std::cout << " " << (int)out_buf[db];
+          }
+          std::cout << " meta.key_=" << res.meta_.key_ << " meta.pos_=" << res.meta_.pos_ << std::endl;
+      }
   }
   if (!impl_->with_pos_map) {
       res.meta_.pos_ = new_leaf + 1;
