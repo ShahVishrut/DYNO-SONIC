@@ -104,7 +104,7 @@ struct SonicORamAdapter::Impl {
     opts.routing_depth = 3; 
     opts.evict_batch = 2; 
     opts.access_concurrency = 16;
-    opts.disjoint_epoch_window = 32;
+    opts.disjoint_epoch_window = 1024;
 
     client = std::make_unique<SonicClient>(opts, std::move(*eviction_team));
     client->initialize();
@@ -460,6 +460,7 @@ std::vector<static_path_oram::Block> SonicORamAdapter::ReadAndRemoveBatch(const 
       memory_access_count_ += thread_access_ops[i];
       memory_bytes_moved_total_ += thread_access_ops[i] * kSonicBlockBytes * 2;
   }
+  impl_->client->flush_epoch();
 
   return results;
 }
@@ -651,6 +652,7 @@ std::vector<static_path_oram::Block> SonicORamAdapter::ReadBatch(const std::vect
       memory_access_count_ += thread_access_ops[i];
       memory_bytes_moved_total_ += thread_access_ops[i] * kSonicBlockBytes * 2;
   }
+  impl_->client->flush_epoch();
 
   return results;
 }
@@ -785,10 +787,9 @@ void SonicORamAdapter::InsertBatch(std::vector<static_path_oram::Block>& blocks,
       }
       std::unique_lock<std::mutex> lock(ops_mutex);
       chunk_cv.wait(lock, [&tasks_pending]{ return tasks_pending == 0; });
-      if (steady_state) {
-          impl_->client->flush_epoch();
-      }
   }
+
+  impl_->client->flush_epoch();
 
   for (int i = 0; i < num_workers; ++i) {
       memory_access_count_ += thread_access_ops[i];
