@@ -339,12 +339,12 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
   for (size_t i = 0; i < B - 1; ++i) {
     bool same_key = sn::obliv::ct_eq(elems[i].key, elems[i+1].key);
     
-    bool is_i_insert = sn::obliv::ct_eq(elems[i].op_type, static_cast<uint8_t>(0));
-    bool is_i_delete = sn::obliv::ct_eq(elems[i].op_type, static_cast<uint8_t>(2));
-    bool is_i_update = sn::obliv::ct_eq(elems[i].op_type, static_cast<uint8_t>(3));
-    bool is_next_search = sn::obliv::ct_eq(elems[i+1].op_type, static_cast<uint8_t>(1));
+    bool is_i_insert = sn::obliv::ct_eq(elems[i].op_type, static_cast<uint8_t>(OpType::Insert));
+    bool is_i_delete = sn::obliv::ct_eq(elems[i].op_type, static_cast<uint8_t>(OpType::Delete));
+    bool is_i_update = sn::obliv::ct_eq(elems[i].op_type, static_cast<uint8_t>(OpType::Update));
+    bool is_next_search = sn::obliv::ct_eq(elems[i+1].op_type, static_cast<uint8_t>(OpType::Search));
     
-    bool is_next_update = sn::obliv::ct_eq(elems[i+1].op_type, static_cast<uint8_t>(3));
+    bool is_next_update = sn::obliv::ct_eq(elems[i+1].op_type, static_cast<uint8_t>(OpType::Update));
     
     bool transform_to_insert_with_swap = same_key & is_i_insert & is_next_search;
     bool transform_to_insert_no_swap = same_key & is_i_insert & is_next_update;
@@ -367,8 +367,8 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
   size_t real_I = 0, real_DS = 0, real_DL = 0;
   for (size_t i = 0; i < B; ++i) {
     bool is_real = !elems[i].is_dummy;
-    bool is_insert = sn::obliv::ct_eq(elems[i].op_type, static_cast<uint8_t>(0));
-    bool is_delete = sn::obliv::ct_eq(elems[i].op_type, static_cast<uint8_t>(2));
+    bool is_insert = sn::obliv::ct_eq(elems[i].op_type, static_cast<uint8_t>(OpType::Insert));
+    bool is_delete = sn::obliv::ct_eq(elems[i].op_type, static_cast<uint8_t>(OpType::Delete));
     uint8_t idx = SubOramIndex(elems[i].key);
     
     real_I += sn::obliv::ct_select<size_t>(1, 0, is_real && is_insert);
@@ -415,9 +415,9 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
     uint8_t idx = SubOramIndex(k);
     uint8_t op_type = static_cast<uint8_t>(batch[i].type);
     
-    bool is_search = sn::obliv::ct_eq(op_type, static_cast<uint8_t>(1));
-    bool is_delete = sn::obliv::ct_eq(op_type, static_cast<uint8_t>(2));
-    bool is_update = sn::obliv::ct_eq(op_type, static_cast<uint8_t>(3));
+    bool is_search = sn::obliv::ct_eq(op_type, static_cast<uint8_t>(OpType::Search));
+    bool is_delete = sn::obliv::ct_eq(op_type, static_cast<uint8_t>(OpType::Delete));
+    bool is_update = sn::obliv::ct_eq(op_type, static_cast<uint8_t>(OpType::Update));
     
     bool is_access = is_search || is_delete || is_update;
     
@@ -451,7 +451,7 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
       std::cout << "[DEBUG] Phase 2: small sub_oram ReadBatch done" << std::endl;
       // Copy read results back to batch for Search operations
       for (size_t i = 0; i < original_B; ++i) {
-          if (small_ops[i].is_real && sn::obliv::ct_eq(small_ops[i].op_type, static_cast<uint8_t>(1))) {
+          if (small_ops[i].is_real && sn::obliv::ct_eq(small_ops[i].op_type, static_cast<uint8_t>(OpType::Search))) {
               batch[i].result.key_ = read_results[i].meta_.key_;
               if (read_results[i].val_) {
                   batch[i].result.val_ = std::make_unique<uint8_t[]>(val_len_);
@@ -466,7 +466,7 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
       std::cout << "[DEBUG] Phase 2: large sub_oram ReadBatch done" << std::endl;
       std::cout << "[DEBUG] Post-Phase 2: large_ops processing start" << std::endl;
       for (size_t i = 0; i < original_B; ++i) {
-          if (large_ops[i].is_real && sn::obliv::ct_eq(large_ops[i].op_type, static_cast<uint8_t>(1))) {
+          if (large_ops[i].is_real && sn::obliv::ct_eq(large_ops[i].op_type, static_cast<uint8_t>(OpType::Search))) {
               batch[i].result.key_ = read_results[i].meta_.key_;
               if (read_results[i].val_) {
                   batch[i].result.val_ = std::make_unique<uint8_t[]>(val_len_);
