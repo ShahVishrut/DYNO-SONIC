@@ -484,13 +484,18 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
   if (sub_orams_[1]) {
     std::cout << "[DEBUG] Pre-Phase 3: sn_inserts populating" << std::endl;
     std::vector<static_path_oram::Block> sn_inserts;
+    int idx = 0;
     for (auto& b : inserts) {
+        if (idx % 100 == 0 || idx > 510) {
+            std::cout << "  [DEBUG] Loop iter " << idx << " start, key=" << b.key_ << std::endl;
+        }
         uint64_t phys_k = PhysicalKey(b.key_, 1);
         static_path_oram::Block new_b(0, phys_k);
         if (b.val_) {
             new_b.val_ = std::move(b.val_);
         }
         sn_inserts.push_back(std::move(new_b));
+        idx++;
     }
     std::cout << "[DEBUG] Pre-Phase 3: sn_inserts populated" << std::endl;
     std::cout << "[DEBUG] Phase 3: large sub_oram InsertBatch" << std::endl;
