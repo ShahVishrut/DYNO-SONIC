@@ -5,6 +5,7 @@
 #include <memory>
 #include <string>
 #include <vector>
+#include <functional>
 
 #include "src/static/oram.h"
 #include "src/utils/crypto.h"

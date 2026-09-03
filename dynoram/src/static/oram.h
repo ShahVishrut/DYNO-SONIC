@@ -53,7 +53,7 @@ const static unsigned char kRightChildValid = 0x02;
 static constexpr const unsigned int kBucketSize = 4; // Z in PathORAM paper
 static constexpr auto kBlockValid{[]() constexpr {
   std::array<char, kBucketSize> res{};
-  for (int i = 0; i < kBucketSize; ++i)
+  for (unsigned int i = 0; i < kBucketSize; ++i)
     res[i] = 0b100 << i;
   return res;
 }()};
