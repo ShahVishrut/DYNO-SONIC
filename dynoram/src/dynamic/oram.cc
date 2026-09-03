@@ -447,7 +447,7 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
       auto read_results = sub_orams_[0]->ReadBatch(small_ops, enc_key, steady_state);
       std::cout << "[DEBUG] Phase 2: small sub_oram ReadBatch done" << std::endl;
       // Copy read results back to batch for Search operations
-      for (size_t i = 0; i < original_B; ++i) {
+      for (size_t i = 0; i < original_accesses; ++i) {
           if (small_ops[i].is_real && sn::obliv::ct_eq(small_ops[i].op_type, static_cast<uint8_t>(OpType::Search))) {
               batch[i].result.key_ = read_results[i].meta_.key_;
               if (read_results[i].val_) {
@@ -462,7 +462,7 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
       auto read_results = sub_orams_[1]->ReadBatch(large_ops, enc_key, steady_state);
       std::cout << "[DEBUG] Phase 2: large sub_oram ReadBatch done" << std::endl;
       std::cout << "[DEBUG] Post-Phase 2: large_ops processing start" << std::endl;
-      for (size_t i = 0; i < original_B; ++i) {
+      for (size_t i = 0; i < original_accesses; ++i) {
           if (large_ops[i].is_real && sn::obliv::ct_eq(large_ops[i].op_type, static_cast<uint8_t>(OpType::Search))) {
               batch[i].result.key_ = read_results[i].meta_.key_;
               if (read_results[i].val_) {
