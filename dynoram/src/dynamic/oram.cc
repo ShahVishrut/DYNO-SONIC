@@ -484,6 +484,9 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
   if (sub_orams_[1]) {
     std::cout << "[DEBUG] Pre-Phase 3: sn_inserts populating" << std::endl;
     std::vector<static_path_oram::Block> sn_inserts;
+    std::cout << "[DEBUG] Reserving sn_inserts..." << std::endl;
+    sn_inserts.reserve(inserts.size());
+    std::cout << "[DEBUG] Reserved sn_inserts!" << std::endl;
     int idx = 0;
     for (auto& b : inserts) {
         if (idx % 100 == 0 || idx > 510) {
