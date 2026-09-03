@@ -142,6 +142,14 @@ Block ORam::Read(Key k, crypto::Key enc_key) {
   }
   memory_access_count_ += SubORamsMemoryAccessCountSum() - start_accesses;
   memory_bytes_moved_total_ += SubORamsMemoryBytesMovedTotalSum() - start_bytes;
+  if (k <= 20) {
+    std::cout << "[DEBUG] ORam::Read k=" << k << " idx=" << (int)idx << " phys_k_S=" << PhysicalKey(k,0) << " phys_k_L=" << PhysicalKey(k,1)
+              << " res.key_=" << res.key_;
+    if (res.val_) std::cout << " val[0]=" << (int)res.val_.get()[0];
+    std::cout << " ptr_S_=" << ptr_S_ << " ptr_L_=" << ptr_L_ << " capacity_=" << capacity_
+              << " cap_S=" << (sub_orams_[0] ? sub_orams_[0]->Capacity() : 0) << " cap_L=" << (sub_orams_[1] ? sub_orams_[1]->Capacity() : 0)
+              << std::endl;
+  }
   return res;
 }
 
@@ -613,7 +621,7 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
     sub_orams_[0]->InsertBatch(BufferS, enc_key, true);
     std::cout << "[DEBUG] Phase 4 inserting BufferL" << std::endl;
     sub_orams_[1]->InsertBatch(BufferL, enc_key, true);
-    std::cout << "[DEBUG] Phase 4 complete" << std::endl;
+    std::cout << "[DEBUG] Phase 4 complete. capacity_=" << capacity_ << " ptr_S_=" << ptr_S_ << " ptr_L_=" << ptr_L_ << std::endl;
   }
 
   // Phase 5: Cascading Resizing & Secondary Transfer
@@ -641,19 +649,36 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
     
     if (!keys_to_move.empty()) {
         std::cout << "[DEBUG] Phase 5 transferring " << keys_to_move.size() << " keys to new L" << std::endl;
+        std::cout << "[DEBUG] Phase 5 state: ptr_S_=" << ptr_S_ << " ptr_L_=" << ptr_L_ 
+                  << " cap_S=" << sub_orams_[0]->Capacity() << " cap_L=" << sub_orams_[1]->Capacity() 
+                  << " old_ptr_S=" << old_ptr_S << std::endl;
+        for (size_t dbg = 0; dbg < keys_to_move.size(); ++dbg) {
+            std::cout << "[DEBUG] Phase 5 extract key[" << dbg << "]: phys_k=" << keys_to_move[dbg].first << std::endl;
+        }
         auto extracted_blocks = sub_orams_[0]->ReadAndRemoveBatch(keys_to_move, enc_key);
+        
+        for (size_t i = 0; i < extracted_blocks.size(); ++i) {
+            auto& b = extracted_blocks[i];
+            std::cout << "[DEBUG] Phase 5 extracted[" << i << "]: meta_.key_=" << b.meta_.key_ 
+                      << " meta_.pos_=" << b.meta_.pos_;
+            if (b.val_) std::cout << " val[0]=" << (int)b.val_.get()[0];
+            std::cout << std::endl;
+        }
         
         // Translate back to logical, then to L's physical keys
         for (size_t i = 0; i < extracted_blocks.size(); ++i) {
             auto& b = extracted_blocks[i];
             if (b.meta_.key_ != 0) {
                 Key log_k = old_ptr_S + i + 1; // Uniquely known
-                b.meta_.key_ = PhysicalKey(log_k, 1);
+                Key new_phys = PhysicalKey(log_k, 1);
+                std::cout << "[DEBUG] Phase 5 remap[" << i << "]: old_phys=" << b.meta_.key_ << " -> log_k=" << log_k << " -> new_phys=" << new_phys << std::endl;
+                b.meta_.key_ = new_phys;
             }
         }
         sub_orams_[1]->InsertBatch(extracted_blocks, enc_key, true);
     }
-    std::cout << "[DEBUG] Phase 5 scale_up complete" << std::endl;
+    std::cout << "[DEBUG] Phase 5 scale_up complete. capacity_=" << capacity_ << " ptr_S_=" << ptr_S_ << " ptr_L_=" << ptr_L_ 
+              << " cap_S=" << sub_orams_[0]->Capacity() << " cap_L=" << sub_orams_[1]->Capacity() << std::endl;
   } else if (scale_down) {
     int64_t old_x = sub_orams_[0]->Capacity();
     int64_t deficit = std::max<int64_t>(0, old_x - static_cast<int64_t>(capacity_));
