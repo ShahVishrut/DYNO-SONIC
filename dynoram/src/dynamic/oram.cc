@@ -189,32 +189,26 @@ uint64_t ORam::PhysicalKey(Key k, uint8_t sub_oram_idx) {
     int64_t cap_s = sub_orams_[0] ? sub_orams_[0]->Capacity() : 1;
     int64_t cap_l = sub_orams_[1] ? sub_orams_[1]->Capacity() : 1;
     
-    int64_t diff_s = static_cast<int64_t>(k - 1) - static_cast<int64_t>(ptr_S_);
-    int64_t p_s = ((diff_s % cap_s) + cap_s) % cap_s;
-    uint64_t p_small = static_cast<uint64_t>(p_s) + 1;
+    uint64_t p_small = ((k - 1) % cap_s) + 1;
+    uint64_t p_large = ((k - 1) % cap_l) + 1;
     
-    int64_t diff_l = static_cast<int64_t>(k - 1) - static_cast<int64_t>(ptr_L_);
-    int64_t p_l = ((diff_l % cap_l) + cap_l) % cap_l;
-    uint64_t p_large = static_cast<uint64_t>(p_l) + 1;
-    
-    return sn::obliv::ct_select<uint64_t>(p_large, p_small, sn::obliv::ct_eq<uint8_t>(sub_oram_idx, 0));
+    return sn::obliv::ct_select<uint64_t>(p_small, p_large, sn::obliv::ct_eq<uint8_t>(sub_oram_idx, 0));
 }
 
 uint64_t ORam::ReconstructLogicalKeySmallOblivious(uint64_t phys_k) {
-    uint64_t res = phys_k + ptr_S_;
-    return sn::obliv::ct_select<uint64_t>(res, 0, sn::obliv::ct_eq<uint64_t>(phys_k, 0));
+    if (phys_k == 0) return 0;
+    uint64_t cap_s = sub_orams_[0] ? sub_orams_[0]->Capacity() : 1;
+    uint64_t m = (ptr_S_ + cap_s - phys_k) / cap_s;
+    uint64_t res = phys_k + m * cap_s;
+    return res;
 }
 
 uint64_t ORam::ReconstructLogicalKeyLargeOblivious(uint64_t phys_k) {
-    uint64_t res = 0;
-    uint64_t y = sub_orams_[1] ? sub_orams_[1]->Capacity() : 1;
-    for (int m = 0; m <= 2; ++m) {
-        uint64_t k = phys_k + ptr_L_ + m * y;
-        bool valid_k = sn::obliv::ct_gt<Key>(k, 0) & sn::obliv::ct_le<Key>(k, capacity_);
-        bool in_large = sn::obliv::ct_eq<uint8_t>(SubOramIndex(k), 1);
-        res = sn::obliv::ct_select<uint64_t>(k, res, valid_k & in_large);
-    }
-    return sn::obliv::ct_select<uint64_t>(res, 0, sn::obliv::ct_eq<uint64_t>(phys_k, 0));
+    if (phys_k == 0) return 0;
+    uint64_t cap_l = sub_orams_[1] ? sub_orams_[1]->Capacity() : 1;
+    uint64_t m = (ptr_L_ + cap_l - phys_k) / cap_l;
+    uint64_t res = phys_k + m * cap_l;
+    return res;
 }
 
 uint64_t ORam::SubORamsMemoryAccessCountSum() {
