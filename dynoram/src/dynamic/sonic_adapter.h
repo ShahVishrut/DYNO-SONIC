@@ -34,7 +34,8 @@ class SonicORamAdapter {
       std::shared_ptr<uint8_t[]> val; // Only valid if op_type == 3
   };
 
-  std::vector<static_path_oram::Key> ObliviousExtractValidKeys(size_t k, size_t T);
+  std::vector<static_path_oram::Key> ObliviousExtractValidKeys(size_t k, size_t T, std::function<bool(static_path_oram::Key)> filter = nullptr);
+  std::vector<static_path_oram::Key> GetAllValidKeys() const;
 
   std::vector<static_path_oram::Block> ReadBatch(const std::vector<AccessOp>& ops, crypto::Key enc_key, bool steady_state = true);
   std::vector<static_path_oram::Block> ReadAndRemoveBatch(const std::vector<std::pair<static_path_oram::Key, bool>>& keys_with_real_flags, crypto::Key enc_key, bool steady_state = true);

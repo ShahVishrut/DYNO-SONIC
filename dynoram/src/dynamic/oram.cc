@@ -21,9 +21,9 @@ ORam::ORam(int starting_size_power_of_two, size_t val_len)
     : capacity_(1UL << starting_size_power_of_two),
       val_len_(val_len),
       size_(1UL << (starting_size_power_of_two)) {
-  auto base_cap = capacity_ >> 1;
-  for (int i = 0; i < 2; ++i)
-    sub_orams_[i] = std::make_unique<PORam>(base_cap << i, val_len, true);
+  auto base_cap = capacity_;
+  sub_orams_[0] = std::make_unique<PORam>(base_cap, val_len, true);
+  sub_orams_[1] = std::make_unique<PORam>(base_cap * 2, val_len, true);
 }
 
 bool IsPowerOfTwo(size_t x) {
@@ -397,6 +397,10 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
   std::vector<Block> inserts;
   std::vector<SonicORamAdapter::AccessOp> small_ops, large_ops;
 
+  if (size_ + original_inserts > capacity_) {
+    steady_state = false;
+  }
+
   for (size_t i = 0; i < original_inserts; ++i) {
     Block b;
     bool is_real = !elems[i].is_dummy;
@@ -536,8 +540,20 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
     int64_t T_pow2 = 1;
     while (T_pow2 < T) T_pow2 *= 2;
 
-    std::vector<Key> S_extracted = sub_orams_[0]->ObliviousExtractValidKeys(std::max<int64_t>(0, k_transfer), T);
-    std::vector<Key> L_extracted = sub_orams_[1]->ObliviousExtractValidKeys(std::max<int64_t>(0, -k_transfer), T);
+    auto filter_S = [this, k_transfer](Key phys_k) {
+        if (k_transfer <= 0) return false;
+        return phys_k <= static_cast<Key>(k_transfer);
+    };
+    
+    auto filter_L = [this, k_transfer](Key phys_k) {
+        if (k_transfer >= 0) return false;
+        Key log_k = ReconstructLogicalKeyLargeOblivious(phys_k);
+        int64_t diff_s_new = static_cast<int64_t>(log_k - 1) - static_cast<int64_t>(ptr_S_ + k_transfer);
+        return diff_s_new >= 0 && diff_s_new < -k_transfer;
+    };
+
+    std::vector<Key> S_extracted = sub_orams_[0]->ObliviousExtractValidKeys(std::max<int64_t>(0, k_transfer), T, filter_S);
+    std::vector<Key> L_extracted = sub_orams_[1]->ObliviousExtractValidKeys(std::max<int64_t>(0, -k_transfer), T, filter_L);
     
     std::cout << "[DEBUG] Phase 4 extracted keys" << std::endl;
 
@@ -597,7 +613,7 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
     // 5. Address Translation (MUST happen before physical key mapping)
     ptr_S_ += std::max(static_cast<int64_t>(0), k_transfer);
     ptr_L_ += std::max(static_cast<int64_t>(0), -k_transfer);
-    capacity_ += (a - real_DS);
+    capacity_ += a;
 
     // 6. Translate logical keys back to physical keys for destination AFTER swapping
     for (uint64_t i = 0; i < T; ++i) {
@@ -615,117 +631,77 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
 
   // Phase 5: Cascading Resizing & Secondary Transfer
   if (scale_up) {
+    // Phase 5 scale_up: 
+    // The old ORAM L (now slightly overstuffed) becomes the new ORAM S.
+    // A new double-sized ORAM L is allocated.
     int64_t old_y = sub_orams_[1]->Capacity();
-    int64_t C = old_y; // Old large capacity (y)
-    int64_t total_elements = capacity_;
-    int64_t excess = std::max<int64_t>(0, total_elements - C);
+    int64_t excess = std::max<int64_t>(0, static_cast<int64_t>(capacity_) - old_y);
     int64_t k_sec = 2 * excess;
-    
-    std::vector<static_path_oram::Block> Buffer;
-    
-    if (k_sec > 0) {
-        int64_t T_sec = k_sec;
-        int64_t T_sec_pow2 = 1;
-        while (T_sec_pow2 < T_sec) T_sec_pow2 *= 2;
 
-        std::vector<Key> extracted = sub_orams_[1]->ObliviousExtractValidKeys(k_sec, T_sec);
-        std::vector<std::pair<Key, bool>> keys;
-        for (int64_t i = 0; i < T_sec; ++i) {
-            keys.push_back({extracted[i], extracted[i] != 0});
-        }
-        
-        std::cout << "[DEBUG] Phase 5 ReadAndRemoveBatch from sub_orams_[1]" << std::endl;
-        Buffer = sub_orams_[1]->ReadAndRemoveBatch(keys, enc_key);
-        std::cout << "[DEBUG] Phase 5 ReadAndRemoveBatch complete" << std::endl;
-        
-        for (uint64_t i = T_sec; i < T_sec_pow2; ++i) {
-            Buffer.emplace_back(true);
-            if (val_len_ > 0) {
-                Buffer.back().val_ = std::make_unique<uint8_t[]>(val_len_);
-                std::fill(Buffer.back().val_.get(), Buffer.back().val_.get() + val_len_, 0);
-            }
-        }
-        
-        // Translate physical keys back to logical keys BEFORE swapping (using old mappings)
-        for (uint64_t i = 0; i < T_sec; ++i) {
-            if (Buffer[i].meta_.key_ != 0) {
-                Buffer[i].meta_.key_ = ReconstructLogicalKeyLargeOblivious(Buffer[i].meta_.key_);
-            }
-        }
-        
-        OCompact(Buffer, 0, T_sec_pow2, val_len_);
-        Buffer.erase(Buffer.begin() + T_sec, Buffer.end());
-    }
-    
-    // NOW do the cascading resize
     sub_orams_[0] = std::move(sub_orams_[1]);
     sub_orams_[1] = std::make_unique<PORam>(2 * old_y, val_len_, true);
     std::swap(ptr_S_, ptr_L_);
+    ptr_S_ += k_sec; // Advance ptr_S_ to maintain the N-j and 2j invariant!
     
-    // NOW insert the buffer into the NEW large
-    if (k_sec > 0) {
-        // Translate logical keys back to physical keys for destination AFTER swapping
-        for (uint64_t i = 0; i < Buffer.size(); ++i) {
-            if (Buffer[i].meta_.key_ != 0) Buffer[i].meta_.key_ = PhysicalKey(Buffer[i].meta_.key_, 1);
+    // Now extract any keys from the new ORAM S that logically belong to the new ORAM L.
+    // Since we are okay leaking the operation type during scaling (per user), we can do this non-obliviously.
+    std::vector<std::pair<Key, bool>> keys_to_move;
+    auto s_keys = sub_orams_[0]->GetAllValidKeys(); // Custom helper to get all keys
+    for (Key phys_k : s_keys) {
+        Key log_k = ReconstructLogicalKeySmallOblivious(phys_k);
+        if (SubOramIndex(log_k) == 1) { // Logically belongs to new L
+            keys_to_move.push_back({phys_k, true});
         }
-        std::cout << "[DEBUG] Phase 5 InsertBatch to sub_orams_[1]" << std::endl;
-        sub_orams_[1]->InsertBatch(Buffer, enc_key, true);
-        std::cout << "[DEBUG] Phase 5 InsertBatch complete" << std::endl;
     }
+    
+    if (!keys_to_move.empty()) {
+        std::cout << "[DEBUG] Phase 5 transferring " << keys_to_move.size() << " keys to new L" << std::endl;
+        auto extracted_blocks = sub_orams_[0]->ReadAndRemoveBatch(keys_to_move, enc_key);
+        
+        // Translate back to logical, then to L's physical keys
+        for (auto& b : extracted_blocks) {
+            if (b.meta_.key_ != 0) {
+                b.meta_.key_ = ReconstructLogicalKeySmallOblivious(b.meta_.key_);
+                b.meta_.key_ = PhysicalKey(b.meta_.key_, 1);
+            }
+        }
+        sub_orams_[1]->InsertBatch(extracted_blocks, enc_key, true);
+    }
+    std::cout << "[DEBUG] Phase 5 scale_up complete" << std::endl;
   } else if (scale_down) {
     int64_t old_x = sub_orams_[0]->Capacity();
-    int64_t C = old_x; // Old small capacity (x)
-    int64_t total_elements = capacity_;
-    int64_t deficit = std::max<int64_t>(0, C - total_elements);
+    int64_t deficit = std::max<int64_t>(0, old_x - static_cast<int64_t>(capacity_));
     int64_t k_sec = deficit;
     
-    std::vector<static_path_oram::Block> Buffer;
+    std::swap(ptr_S_, ptr_L_);
+    ptr_S_ -= k_sec; // Shift pointer backwards to absorb deficit
     
-    if (k_sec > 0) {
-        int64_t T_sec = k_sec;
-        int64_t T_sec_pow2 = 1;
-        while (T_sec_pow2 < T_sec) T_sec_pow2 *= 2;
-
-        std::vector<Key> extracted = sub_orams_[0]->ObliviousExtractValidKeys(k_sec, T_sec);
-        std::vector<std::pair<Key, bool>> keys;
-        for (int64_t i = 0; i < T_sec; ++i) {
-            keys.push_back({extracted[i], extracted[i] != 0});
+    std::vector<std::pair<Key, bool>> keys_to_move;
+    auto l_keys = sub_orams_[1]->GetAllValidKeys(); // Custom helper
+    for (Key phys_k : l_keys) {
+        Key log_k = ReconstructLogicalKeyLargeOblivious(phys_k);
+        if (SubOramIndex(log_k) == 0) { // Logically belongs to new S
+            keys_to_move.push_back({phys_k, true});
         }
-        
-        Buffer = sub_orams_[0]->ReadAndRemoveBatch(keys, enc_key);
-        
-        for (uint64_t i = T_sec; i < T_sec_pow2; ++i) {
-            Buffer.emplace_back(true);
-            if (val_len_ > 0) {
-                Buffer.back().val_ = std::make_unique<uint8_t[]>(val_len_);
-                std::fill(Buffer.back().val_.get(), Buffer.back().val_.get() + val_len_, 0);
-            }
-        }
-        
-        // Translate physical keys back to logical keys BEFORE swapping
-        for (uint64_t i = 0; i < T_sec; ++i) {
-            if (Buffer[i].meta_.key_ != 0) {
-                Buffer[i].meta_.key_ = ReconstructLogicalKeySmallOblivious(Buffer[i].meta_.key_);
-            }
-        }
-        
-        OCompact(Buffer, 0, T_sec_pow2, val_len_);
-        Buffer.erase(Buffer.begin() + T_sec, Buffer.end());
     }
     
-    // NOW do the cascading resize
+    if (!keys_to_move.empty()) {
+        std::cout << "[DEBUG] Phase 5 transferring " << keys_to_move.size() << " keys to new S" << std::endl;
+        auto extracted_blocks = sub_orams_[1]->ReadAndRemoveBatch(keys_to_move, enc_key);
+        
+        // Translate back to logical, then to S's physical keys
+        for (auto& b : extracted_blocks) {
+            if (b.meta_.key_ != 0) {
+                b.meta_.key_ = ReconstructLogicalKeyLargeOblivious(b.meta_.key_);
+                b.meta_.key_ = PhysicalKey(b.meta_.key_, 0);
+            }
+        }
+        sub_orams_[0]->InsertBatch(extracted_blocks, enc_key, true);
+    }
+    
     sub_orams_[1] = std::move(sub_orams_[0]);
     sub_orams_[0] = std::make_unique<PORam>(old_x / 2, val_len_, true);
-    std::swap(ptr_S_, ptr_L_);
-    
-    // NOW insert the buffer into the NEW small
-    if (k_sec > 0) {
-        // Translate logical keys back to physical keys for destination AFTER swapping
-        for (uint64_t i = 0; i < Buffer.size(); ++i) {
-            if (Buffer[i].meta_.key_ != 0) Buffer[i].meta_.key_ = PhysicalKey(Buffer[i].meta_.key_, 0);
-        }
-        sub_orams_[0]->InsertBatch(Buffer, enc_key, true);
-    }
+    std::cout << "[DEBUG] Phase 5 scale_down complete" << std::endl;
   }
 
   if (B > original_B) {

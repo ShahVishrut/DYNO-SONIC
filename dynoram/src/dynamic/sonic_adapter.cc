@@ -464,11 +464,12 @@ std::vector<static_path_oram::Block> SonicORamAdapter::ReadAndRemoveBatch(const 
   return results;
 }
 
-std::vector<static_path_oram::Key> SonicORamAdapter::ObliviousExtractValidKeys(size_t k, size_t T) {
+std::vector<static_path_oram::Key> SonicORamAdapter::ObliviousExtractValidKeys(size_t k, size_t T, std::function<bool(static_path_oram::Key)> filter) {
   std::vector<static_path_oram::Key> S_keys(T, 0); 
   uint64_t count = 0;
   for (uint64_t i = 1; i <= capacity_; ++i) { 
       bool is_real = (impl_->pos_map[i] != UINT64_MAX);
+      if (is_real && filter && !filter(i)) is_real = false; // Apply filter
       bool take = is_real & (count < k); 
       for (uint64_t j = 0; j < T; ++j) { 
           bool match = take & (count == j);
@@ -477,6 +478,16 @@ std::vector<static_path_oram::Key> SonicORamAdapter::ObliviousExtractValidKeys(s
       count = sn::obliv::ct_select(count + 1, count, take);
   }
   return S_keys;
+}
+
+std::vector<static_path_oram::Key> SonicORamAdapter::GetAllValidKeys() const {
+  std::vector<static_path_oram::Key> keys;
+  for (uint64_t i = 1; i <= capacity_; ++i) {
+      if (impl_->pos_map[i] != UINT64_MAX) {
+          keys.push_back(i);
+      }
+  }
+  return keys;
 }
 
 std::vector<static_path_oram::Block> SonicORamAdapter::ReadBatch(const std::vector<AccessOp>& ops, crypto::Key enc_key, bool steady_state) {
