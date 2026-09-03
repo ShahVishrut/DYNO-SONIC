@@ -411,11 +411,7 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
 
   for (size_t i = 0; i < original_B; ++i) {
     Key k = batch[i].key;
-    bool is_real = false;
-    for (size_t j = 0; j < B; ++j) {
-        bool match = sn::obliv::ct_eq<uint64_t>(elems[j].seq, i);
-        is_real = sn::obliv::ct_select<bool>(!elems[j].is_dummy, is_real, match);
-    }
+    bool is_real = !elems[i].is_dummy;
     uint8_t idx = SubOramIndex(k);
     uint8_t op_type = static_cast<uint8_t>(batch[i].type);
     
@@ -493,15 +489,11 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
             std::cout << "  [DEBUG] Loop iter " << idx << " start, key=" << b.key_ << std::endl;
         }
         uint64_t phys_k = PhysicalKey(b.key_, 1);
-        std::cout << "    [DEBUG] phys_k computed" << std::endl;
-        static_path_oram::Block new_b(0, phys_k);
-        std::cout << "    [DEBUG] new_b constructed" << std::endl;
+        static_path_oram::Block new_b(static_cast<static_path_oram::Pos>(0), static_cast<static_path_oram::Key>(phys_k));
         if (b.val_) {
             new_b.val_ = std::move(b.val_);
         }
-        std::cout << "    [DEBUG] val moved" << std::endl;
         sn_inserts.push_back(std::move(new_b));
-        std::cout << "    [DEBUG] pushed back" << std::endl;
         idx++;
     }
     std::cout << "[DEBUG] Pre-Phase 3: sn_inserts populated" << std::endl;
