@@ -288,10 +288,7 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
         elems[i].key = batch[i].key;
         elems[i].seq = static_cast<uint32_t>(i);
         elems[i].is_dummy = false;
-        if (batch[i].type == OpType::Insert) elems[i].op_type = 0;
-        else if (batch[i].type == OpType::Search) elems[i].op_type = 1;
-        else if (batch[i].type == OpType::Delete) elems[i].op_type = 2;
-        else elems[i].op_type = 3; // Update
+        elems[i].op_type = static_cast<uint8_t>(batch[i].type);
     } else {
         elems[i].key = 0;
         elems[i].seq = static_cast<uint32_t>(i);
@@ -393,11 +390,11 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
   };
   sn::sortshuffle::ser::bitonic::detail::bitonic_sort_impl(elems.data(), B, key_ext, comp2, hook);
 
-  // Dispatch exactly to Public Bounds
   std::vector<Block> inserts;
   std::vector<SonicORamAdapter::AccessOp> small_ops, large_ops;
+  size_t original_accesses = original_B - original_inserts;
 
-  for (size_t i = 0; i < original_inserts; ++i) {
+  for (size_t i = original_accesses; i < original_B; ++i) {
     Block b;
     bool is_real = !elems[i].is_dummy;
     b.key_ = sn::obliv::ct_select<uint64_t>(batch[i].key, 0, is_real);
@@ -409,7 +406,7 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
     inserts.push_back(std::move(b));
   }
 
-  for (size_t i = 0; i < original_B; ++i) {
+  for (size_t i = 0; i < original_accesses; ++i) {
     Key k = batch[i].key;
     bool is_real = !elems[i].is_dummy;
     uint8_t idx = SubOramIndex(k);
