@@ -137,15 +137,7 @@ Block ORam::Read(Key k, crypto::Key enc_key) {
     
     res.key_ = sn::obliv::ct_select<Key>(k, res.key_, is_real && (bl.meta_.key_ != 0));
     if (bl.val_) {
-        if (k <= 20) {
-            std::cout << "[DEBUG] ORam::Read loop i=" << i << " is_real=" << is_real 
-                      << " bl.val_[0]=" << (int)bl.val_.get()[0] 
-                      << " res.val_[0]_before=" << (int)res.val_.get()[0];
-        }
         sn::obliv::ct_select_array(res.val_.get(), bl.val_.get(), res.val_.get(), val_len_, is_real);
-        if (k <= 20) {
-            std::cout << " res.val_[0]_after=" << (int)res.val_.get()[0] << std::endl;
-        }
     }
   }
   memory_access_count_ += SubORamsMemoryAccessCountSum() - start_accesses;
