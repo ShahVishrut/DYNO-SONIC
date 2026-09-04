@@ -341,25 +341,36 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
     bool is_i_insert = sn::obliv::ct_eq(elems[i].op_type, static_cast<uint8_t>(OpType::Insert));
     bool is_i_delete = sn::obliv::ct_eq(elems[i].op_type, static_cast<uint8_t>(OpType::Delete));
     bool is_i_update = sn::obliv::ct_eq(elems[i].op_type, static_cast<uint8_t>(OpType::Update));
-    bool is_next_search = sn::obliv::ct_eq(elems[i+1].op_type, static_cast<uint8_t>(OpType::Search));
     
+    bool is_next_search = sn::obliv::ct_eq(elems[i+1].op_type, static_cast<uint8_t>(OpType::Search));
     bool is_next_update = sn::obliv::ct_eq(elems[i+1].op_type, static_cast<uint8_t>(OpType::Update));
     
-    bool transform_to_insert_with_swap = same_key & is_i_insert & is_next_search;
-    bool transform_to_insert_no_swap = same_key & is_i_insert & is_next_update;
-    bool transform_to_delete = same_key & is_i_delete & is_next_search;
-    bool transform_to_update = same_key & is_i_update & is_next_search;
+    // Write -> Read dependencies: Forward the written value to the Search result
+    bool insert_search = same_key & is_i_insert & is_next_search;
+    bool update_search = same_key & is_i_update & is_next_search;
+    bool delete_search = same_key & is_i_delete & is_next_search;
     
-    elems[i+1].op_type = sn::obliv::ct_select<uint8_t>(static_cast<uint8_t>(OpType::Search), elems[i+1].op_type, transform_to_insert_with_swap | transform_to_insert_no_swap);
-    elems[i+1].op_type = sn::obliv::ct_select<uint8_t>(static_cast<uint8_t>(OpType::Delete), elems[i+1].op_type, transform_to_delete);
-    elems[i+1].op_type = sn::obliv::ct_select<uint8_t>(static_cast<uint8_t>(OpType::Update), elems[i+1].op_type, transform_to_update);
+    // Write -> Write dependencies crossing boundaries
+    bool insert_update = same_key & is_i_insert & is_next_update;
     
-    bool do_swap = transform_to_insert_with_swap | transform_to_update;
+    // For dependencies where the first operation carries the payload (or structural action),
+    // we make the second operation dummy and swap/copy the values appropriately.
+    bool second_dummy = insert_search | update_search | delete_search | insert_update;
+    
+    sn::obliv::ct_set_ref(elems[i+1].is_dummy, true, second_dummy);
+    sn::obliv::ct_set_ref(elems[i].is_dummy, true, same_key & !second_dummy);
+    
     if (val_len_ > 0) {
-        sn::obliv::ct_swap_array(batch[i].val.get(), batch[i+1].val.get(), val_len_, do_swap);
+        // Forward copy: Insert->Search or Update->Search
+        sn::obliv::ct_select_array(batch[i+1].val.get(), batch[i].val.get(), batch[i+1].val.get(), val_len_, insert_search | update_search);
+        
+        // Backward copy: Insert->Update
+        sn::obliv::ct_select_array(batch[i].val.get(), batch[i+1].val.get(), batch[i].val.get(), val_len_, insert_update);
+        
+        // Clear forward: Delete->Search
+        std::vector<uint8_t> zeros(val_len_, 0);
+        sn::obliv::ct_select_array(batch[i+1].val.get(), zeros.data(), batch[i+1].val.get(), val_len_, delete_search);
     }
-    
-    sn::obliv::ct_set_ref(elems[i].is_dummy, true, same_key);
   }
 
   // Calculate Real Net Growth Obliviously BEFORE Deletes are forced to dummies
