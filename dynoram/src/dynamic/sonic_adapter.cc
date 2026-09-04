@@ -581,7 +581,7 @@ std::vector<static_path_oram::Block> SonicORamAdapter::ReadBatch(const std::vect
                       req.address = sn::obliv::ct_select<uint64_t>(op.key - 1, UINT64_MAX, op.is_real);
                       req.cur_leaf = batch_cur_leaves[j];
                       req.new_leaf = batch_new_leaves[j];
-                      bool is_update = sn::obliv::ct_eq<uint8_t>(op.op_type, 3);
+                      bool is_update = sn::obliv::ct_eq<uint8_t>(op.op_type, 1);
                       bool is_delete = sn::obliv::ct_eq<uint8_t>(op.op_type, 2);
                       req.is_write = is_update | is_delete;
                       
