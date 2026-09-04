@@ -270,7 +270,7 @@ void TestORamComprehensiveMixedWorkload() {
       seed_batch;
   for (int i = 1; i <= 512; ++i) {
     dyno::dynamic_stepping_path_oram::ORam::BatchOperation op;
-    op.type = dyno::dynamic_stepping_path_oram::ORam::OpType::Update;
+    op.type = dyno::dynamic_stepping_path_oram::ORam::OpType::Insert;
     op.key = i;
     op.val = std::make_unique<uint8_t[]>(8);
     uint64_t v = dist_val(rng);
@@ -298,13 +298,15 @@ void TestORamComprehensiveMixedWorkload() {
       std::memcpy(op.val.get(), &v, 8);
       shadow_state[op.key] = v;
     } else if (op_rand < 40) {
-      // Update
+      // Update (only affects existing keys in the ORAM)
       op.key = dist_key(rng);
       op.type = dyno::dynamic_stepping_path_oram::ORam::OpType::Update;
       op.val = std::make_unique<uint8_t[]>(8);
       uint64_t v = dist_val(rng);
       std::memcpy(op.val.get(), &v, 8);
-      shadow_state[op.key] = v;
+      if (shadow_state.count(op.key) > 0) {
+        shadow_state[op.key] = v;
+      }
     } else if (op_rand < 80) {
       // Read
       op.key = dist_key(rng);
