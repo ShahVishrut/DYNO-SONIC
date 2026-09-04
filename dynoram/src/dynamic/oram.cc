@@ -109,7 +109,7 @@ Block ORam::ReadAndRemove(Key k, crypto::Key enc_key) {
     uint64_t cap = (i == 0) ? cap_S : cap_L;
     uint64_t phys_k = 0;
     for (uint64_t j = 1; j <= cap; ++j) {
-        bool match = sn::obliv::ct_eq(k, log_map_[i][j]);
+        bool match = sn::obliv::ct_eq(static_cast<uint64_t>(k), log_map_[i][j]);
         phys_k = sn::obliv::ct_select<uint64_t>(j, phys_k, match);
         log_map_[i][j] = sn::obliv::ct_select<uint64_t>(0, log_map_[i][j], match);
     }
@@ -147,7 +147,7 @@ Block ORam::Read(Key k, crypto::Key enc_key) {
     uint64_t cap = (i == 0) ? cap_S : cap_L;
     uint64_t phys_k = 0;
     for (uint64_t j = 1; j <= cap; ++j) {
-        bool match = sn::obliv::ct_eq(k, log_map_[i][j]);
+        bool match = sn::obliv::ct_eq(static_cast<uint64_t>(k), log_map_[i][j]);
         phys_k = sn::obliv::ct_select<uint64_t>(j, phys_k, match);
     }
     
@@ -275,7 +275,7 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
       for (uint64_t i = 1; i <= cap_S; ++i) {
           uint64_t log_k = log_map_[0][i];
           for (auto& op : batch) {
-              bool match = (log_k != 0) && sn::obliv::ct_eq(op.key, log_k);
+              bool match = (log_k != 0) && sn::obliv::ct_eq(static_cast<uint64_t>(op.key), log_k);
               op.sub_oram_idx = sn::obliv::ct_select<int8_t>(0, op.sub_oram_idx, match);
               op.phys_k = sn::obliv::ct_select<uint64_t>(i, op.phys_k, match);
           }
@@ -286,7 +286,7 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
       for (uint64_t i = 1; i <= cap_L; ++i) {
           uint64_t log_k = log_map_[1][i];
           for (auto& op : batch) {
-              bool match = (log_k != 0) && sn::obliv::ct_eq(op.key, log_k);
+              bool match = (log_k != 0) && sn::obliv::ct_eq(static_cast<uint64_t>(op.key), log_k);
               op.sub_oram_idx = sn::obliv::ct_select<int8_t>(1, op.sub_oram_idx, match);
               op.phys_k = sn::obliv::ct_select<uint64_t>(i, op.phys_k, match);
           }
@@ -505,7 +505,7 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
   for (size_t i = original_accesses; i < B; ++i) {
     Block b;
     bool is_real = !elems[i].is_dummy;
-    uint32_t orig_idx = elems[i].orig_idx;
+    uint32_t orig_idx = elems[i].seq;
     b.key_ = sn::obliv::ct_select<uint64_t>(batch[orig_idx].key, 0, is_real);
     
     if (batch[orig_idx].val) {
@@ -516,8 +516,7 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
   }
 
   for (size_t i = 0; i < original_accesses; ++i) {
-    uint32_t orig_idx = elems[i].orig_idx;
-    Key k = batch[orig_idx].key;
+    uint32_t orig_idx = elems[i].seq;
     bool is_real = !elems[i].is_dummy;
     uint8_t idx = batch[orig_idx].sub_oram_idx;
     uint8_t op_type = static_cast<uint8_t>(batch[orig_idx].type);
@@ -555,7 +554,7 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
       std::cout << "[DEBUG] Phase 2: small sub_oram ReadBatch done" << std::endl;
       for (size_t i = 0; i < original_accesses; ++i) {
           if (small_ops[i].is_real) {
-              uint32_t orig_idx = elems[i].orig_idx;
+              uint32_t orig_idx = elems[i].seq;
               batch[orig_idx].result.key_ = read_results[i].meta_.key_;
               if (read_results[i].val_) {
                   batch[orig_idx].result.val_ = std::make_unique<uint8_t[]>(val_len_);
@@ -570,7 +569,7 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
       std::cout << "[DEBUG] Phase 2: large sub_oram ReadBatch done" << std::endl;
       for (size_t i = 0; i < original_accesses; ++i) {
           if (large_ops[i].is_real) {
-              uint32_t orig_idx = elems[i].orig_idx;
+              uint32_t orig_idx = elems[i].seq;
               batch[orig_idx].result.key_ = read_results[i].meta_.key_;
               if (read_results[i].val_) {
                   batch[orig_idx].result.val_ = std::make_unique<uint8_t[]>(val_len_);
@@ -588,7 +587,7 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
       bool end_of_key = (i == static_cast<int64_t>(original_accesses) - 1) || !sn::obliv::ct_eq(elems[i].key, elems[i+1].key);
       has_old_payload = sn::obliv::ct_select(false, has_old_payload, end_of_key);
       
-      uint32_t orig_idx = elems[i].orig_idx;
+      uint32_t orig_idx = elems[i].seq;
       bool is_real = !elems[i].is_dummy;
       bool is_search = sn::obliv::ct_eq(elems[i].op_type, static_cast<uint8_t>(OpType::Search));
       
@@ -631,7 +630,7 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
         // Let's modify the `inserts` population logic to store phys_k directly!
         uint64_t phys_k = 0;
         for (size_t j = original_accesses; j < B; ++j) {
-            uint32_t orig_idx = elems[j].orig_idx;
+            uint32_t orig_idx = elems[j].seq;
             bool match = sn::obliv::ct_eq(b.key_, batch[orig_idx].key);
             phys_k = sn::obliv::ct_select(batch[orig_idx].phys_k, phys_k, match);
         }
