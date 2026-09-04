@@ -345,6 +345,13 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
   };
   sn::sortshuffle::ser::bitonic::detail::bitonic_sort_impl(elems.data(), B, key_ext, comp1, hook);
 
+  // After bitonic sort, batch is co-sorted with elems via the hook.
+  // Reset seq to current position so batch[elems[i].seq] == batch[i] stays correct
+  // even after the later std::sort reorders elems without touching batch.
+  for (size_t i = 0; i < B; ++i) {
+      elems[i].seq = static_cast<uint32_t>(i);
+  }
+
   // Phase 2: O-Scan (Collapse) using Two Passes
   // Pass 1: Forward Scan
   // Propagates the latest payload to Search operations, and tracks if the key was deleted.
