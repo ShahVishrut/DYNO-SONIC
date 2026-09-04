@@ -772,9 +772,9 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
         if (k_transfer > 0) sub_orams_[1]->InsertBatch(Buffer, enc_key, true);
         else sub_orams_[0]->InsertBatch(Buffer, enc_key, true);
     }
-    
-    capacity_ += a;
   }
+
+  capacity_ += a;
 
   // Phase 5: Simple Structural Scale Up/Down with Secondary Transfers
   if (scale_up) {
