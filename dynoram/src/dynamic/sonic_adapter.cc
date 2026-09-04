@@ -744,6 +744,11 @@ void SonicORamAdapter::InsertBatch(std::vector<static_path_oram::Block>& blocks,
                           sn::oram::tree::block<kSonicBlockBytes> new_block{};
                           new_block.address = k - 1;
                           new_block.leaf_ix = batch_new_leaves[j];
+                          if (k <= 20) {
+                              std::cout << "[DEBUG] SonicInsert k=" << k << " in_buf[0..23]=";
+                              for(int db=0; db<24; ++db) std::cout << " " << (int)in_buf[db];
+                              std::cout << std::endl;
+                          }
                           std::copy(in_buf.begin(), in_buf.end(), new_block.data.begin());
                           {
                               std::lock_guard<std::mutex> client_lock(ops_mutex);
