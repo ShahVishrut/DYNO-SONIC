@@ -593,6 +593,24 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
       }
   }
 
+  // Clear log_map entries for successfully executed Deletes
+  for (size_t i = 0; i < original_accesses; ++i) {
+      uint32_t orig_idx = elems[i].seq;
+      bool is_real = !elems[i].is_dummy;
+      bool is_delete = sn::obliv::ct_eq(elems[i].op_type, static_cast<uint8_t>(OpType::Delete));
+      bool should_clear = is_real && is_delete;
+      
+      if (should_clear) {
+          uint8_t idx = batch[orig_idx].sub_oram_idx;
+          uint64_t phys_k = batch[orig_idx].phys_k;
+          if (idx == 0 && phys_k > 0 && phys_k < log_map_[0].size()) {
+              log_map_[0][phys_k] = 0;
+          } else if (idx == 1 && phys_k > 0 && phys_k < log_map_[1].size()) {
+              log_map_[1][phys_k] = 0;
+          }
+      }
+  }
+
   // Phase 2.5: Post-ReadBatch backward scan to propagate old values to dummy Searches
   std::vector<uint8_t> old_payload(val_len_, 0);
   bool has_old_payload = false;
