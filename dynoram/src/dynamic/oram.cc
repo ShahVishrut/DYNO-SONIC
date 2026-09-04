@@ -350,9 +350,9 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
     bool transform_to_delete = same_key & is_i_delete & is_next_search;
     bool transform_to_update = same_key & is_i_update & is_next_search;
     
-    elems[i+1].op_type = sn::obliv::ct_select<uint8_t>(0, elems[i+1].op_type, transform_to_insert_with_swap | transform_to_insert_no_swap);
-    elems[i+1].op_type = sn::obliv::ct_select<uint8_t>(2, elems[i+1].op_type, transform_to_delete);
-    elems[i+1].op_type = sn::obliv::ct_select<uint8_t>(3, elems[i+1].op_type, transform_to_update);
+    elems[i+1].op_type = sn::obliv::ct_select<uint8_t>(static_cast<uint8_t>(OpType::Search), elems[i+1].op_type, transform_to_insert_with_swap | transform_to_insert_no_swap);
+    elems[i+1].op_type = sn::obliv::ct_select<uint8_t>(static_cast<uint8_t>(OpType::Delete), elems[i+1].op_type, transform_to_delete);
+    elems[i+1].op_type = sn::obliv::ct_select<uint8_t>(static_cast<uint8_t>(OpType::Update), elems[i+1].op_type, transform_to_update);
     
     bool do_swap = transform_to_insert_with_swap | transform_to_update;
     if (val_len_ > 0) {
