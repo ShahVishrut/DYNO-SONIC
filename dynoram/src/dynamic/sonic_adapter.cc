@@ -721,6 +721,7 @@ void SonicORamAdapter::InsertBatch(std::vector<static_path_oram::Block>& blocks,
   std::mutex ops_mutex;
   std::condition_variable chunk_cv;
 
+  size_t batch_count = 0;
   for (size_t chunk_start = 0; chunk_start < B; chunk_start += chunk_size) {
       size_t chunk_end = std::min(B, chunk_start + chunk_size);
       int tasks_pending = num_workers;
@@ -792,9 +793,17 @@ void SonicORamAdapter::InsertBatch(std::vector<static_path_oram::Block>& blocks,
       }
       std::unique_lock<std::mutex> lock(ops_mutex);
       chunk_cv.wait(lock, [&tasks_pending]{ return tasks_pending == 0; });
+      
+      batch_count += chunk_size;
+      if (batch_count + chunk_size > 1000) {
+          impl_->client->flush_epoch();
+          batch_count = 0;
+      }
   }
 
-  impl_->client->flush_epoch();
+  if (batch_count > 0) {
+      impl_->client->flush_epoch();
+  }
 
   for (int i = 0; i < num_workers; ++i) {
       memory_access_count_ += thread_access_ops[i];

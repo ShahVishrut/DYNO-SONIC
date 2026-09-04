@@ -368,7 +368,7 @@ void TestORamDeterministicScale() {
     std::cout << "  [Test] Executing Update Batch (3 Updates)...\n";
     oram->ExecuteBatch(batch2, enc_key);
     
-    for (int i = 1025; i <= 1027; ++i) {
+    for (int i = 1; i <= 3; ++i) {
         auto res = oram->Read(i, enc_key);
         if (res.val_ == nullptr || res.val_.get()[0] != ((i % 255) + 20)) {
             std::cerr << "Mismatch at Key " << i << " after update!\n";
