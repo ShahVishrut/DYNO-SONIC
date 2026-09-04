@@ -334,43 +334,112 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
   };
   sn::sortshuffle::ser::bitonic::detail::bitonic_sort_impl(elems.data(), B, key_ext, comp1, hook);
 
-  // Phase 2: O-Scan (Collapse)
-  for (size_t i = 0; i < B - 1; ++i) {
-    bool same_key = sn::obliv::ct_eq(elems[i].key, elems[i+1].key);
-    
-    bool is_i_insert = sn::obliv::ct_eq(elems[i].op_type, static_cast<uint8_t>(OpType::Insert));
-    bool is_i_delete = sn::obliv::ct_eq(elems[i].op_type, static_cast<uint8_t>(OpType::Delete));
-    bool is_i_update = sn::obliv::ct_eq(elems[i].op_type, static_cast<uint8_t>(OpType::Update));
-    
-    bool is_next_search = sn::obliv::ct_eq(elems[i+1].op_type, static_cast<uint8_t>(OpType::Search));
-    bool is_next_update = sn::obliv::ct_eq(elems[i+1].op_type, static_cast<uint8_t>(OpType::Update));
-    
-    // Write -> Read dependencies: Forward the written value to the Search result
-    bool insert_search = same_key & is_i_insert & is_next_search;
-    bool update_search = same_key & is_i_update & is_next_search;
-    bool delete_search = same_key & is_i_delete & is_next_search;
-    
-    // Write -> Write dependencies crossing boundaries
-    bool insert_update = same_key & is_i_insert & is_next_update;
-    
-    // For dependencies where the first operation carries the payload (or structural action),
-    // we make the second operation dummy and swap/copy the values appropriately.
-    bool second_dummy = insert_search | update_search | delete_search | insert_update;
-    
-    sn::obliv::ct_set_ref(elems[i+1].is_dummy, true, second_dummy);
-    sn::obliv::ct_set_ref(elems[i].is_dummy, true, same_key & !second_dummy);
-    
-    if (val_len_ > 0) {
-        // Forward copy: Insert->Search or Update->Search
-        sn::obliv::ct_select_array(batch[i+1].val.get(), batch[i].val.get(), batch[i+1].val.get(), val_len_, insert_search | update_search);
-        
-        // Backward copy: Insert->Update
-        sn::obliv::ct_select_array(batch[i].val.get(), batch[i+1].val.get(), batch[i].val.get(), val_len_, insert_update);
-        
-        // Clear forward: Delete->Search
-        std::vector<uint8_t> zeros(val_len_, 0);
-        sn::obliv::ct_select_array(batch[i+1].val.get(), zeros.data(), batch[i+1].val.get(), val_len_, delete_search);
-    }
+  // Phase 2: O-Scan (Collapse) using Two Passes
+  // Pass 1: Forward Scan
+  // Propagates the latest payload to Search operations, and tracks if the key was deleted.
+  std::vector<uint8_t> current_payload(val_len_, 0);
+  bool has_payload = false;
+  bool is_deleted = false;
+  
+  for (size_t i = 0; i < B; ++i) {
+      bool start_of_key = (i == 0) || !sn::obliv::ct_eq(elems[i].key, elems[i-1].key);
+      has_payload = sn::obliv::ct_select(false, has_payload, start_of_key);
+      is_deleted = sn::obliv::ct_select(false, is_deleted, start_of_key);
+      
+      bool is_insert = sn::obliv::ct_eq(elems[i].op_type, static_cast<uint8_t>(OpType::Insert));
+      bool is_update = sn::obliv::ct_eq(elems[i].op_type, static_cast<uint8_t>(OpType::Update));
+      bool is_delete = sn::obliv::ct_eq(elems[i].op_type, static_cast<uint8_t>(OpType::Delete));
+      bool is_search = sn::obliv::ct_eq(elems[i].op_type, static_cast<uint8_t>(OpType::Search));
+      
+      bool is_write = is_insert | is_update;
+      
+      if (val_len_ > 0) {
+          sn::obliv::ct_select_array(current_payload.data(), batch[i].val.get(), current_payload.data(), val_len_, is_write);
+      }
+      has_payload = has_payload | is_write;
+      has_payload = sn::obliv::ct_select(false, has_payload, is_delete);
+      is_deleted = sn::obliv::ct_select(true, is_deleted, is_delete);
+      is_deleted = sn::obliv::ct_select(false, is_deleted, is_insert);
+      
+      bool forward_to_search = is_search & has_payload & !is_deleted;
+      if (val_len_ > 0) {
+          if (!batch[i].result.val_) {
+              batch[i].result.val_ = std::make_unique<uint8_t[]>(val_len_);
+              std::fill(batch[i].result.val_.get(), batch[i].result.val_.get() + val_len_, 0);
+          }
+          sn::obliv::ct_select_array(batch[i].result.val_.get(), current_payload.data(), batch[i].result.val_.get(), val_len_, forward_to_search);
+      }
+      // If a search receives a forwarded payload, or if it searches a deleted key, it becomes dummy
+      bool search_becomes_dummy = (is_search & has_payload) | (is_search & is_deleted);
+      sn::obliv::ct_set_ref(elems[i].is_dummy, true, search_becomes_dummy);
+  }
+
+  // Pass 2: Backward Scan
+  // Determines exactly ONE real operation (Insert, Update, or Delete) per key,
+  // and propagates the final payload backwards to it.
+  bool has_future_write = false;
+  bool has_future_delete = false;
+  std::vector<uint8_t> backward_payload(val_len_, 0);
+  
+  for (int64_t i = B - 1; i >= 0; --i) {
+      bool end_of_key = (i == B - 1) || !sn::obliv::ct_eq(elems[i].key, elems[i+1].key);
+      has_future_write = sn::obliv::ct_select(false, has_future_write, end_of_key);
+      has_future_delete = sn::obliv::ct_select(false, has_future_delete, end_of_key);
+      
+      bool is_insert = sn::obliv::ct_eq(elems[i].op_type, static_cast<uint8_t>(OpType::Insert));
+      bool is_update = sn::obliv::ct_eq(elems[i].op_type, static_cast<uint8_t>(OpType::Update));
+      bool is_delete = sn::obliv::ct_eq(elems[i].op_type, static_cast<uint8_t>(OpType::Delete));
+      
+      // If this is the FIRST write we see going backwards, it captures the payload
+      bool captures_payload = (is_insert | is_update) & !has_future_write & !has_future_delete;
+      if (val_len_ > 0) {
+          sn::obliv::ct_select_array(backward_payload.data(), batch[i].val.get(), backward_payload.data(), val_len_, captures_payload);
+      }
+      
+      // If there is a future write or delete, this operation is overshadowed and becomes dummy
+      bool overshadowed = (is_insert | is_update | is_delete) & (has_future_write | has_future_delete);
+      
+      // Exception: If this is an Insert, and there are future Updates, the Insert MUST remain real 
+      // (to be processed by InsertBatch and increment real_I). 
+      // It will absorb the backward_payload. The future Updates become dummy.
+      bool is_dominant_insert = is_insert & has_future_write & !has_future_delete;
+      overshadowed = sn::obliv::ct_select(false, overshadowed, is_dominant_insert);
+      
+      if (val_len_ > 0) {
+          sn::obliv::ct_select_array(batch[i].val.get(), backward_payload.data(), batch[i].val.get(), val_len_, is_dominant_insert);
+      }
+      
+      sn::obliv::ct_set_ref(elems[i].is_dummy, true, overshadowed);
+      
+      // If this operation was an Insert that remained real, it absorbs all future writes,
+      // so we set has_future_write = true (which it already is) but it effectively overshadows PAST writes.
+      has_future_write = has_future_write | is_insert | is_update;
+      has_future_delete = sn::obliv::ct_select(false, has_future_delete, is_insert); // Insert cancels future delete
+      has_future_delete = has_future_delete | is_delete;
+  }
+  
+  // Pass 3: Clean up Insert->Delete pairs
+  // If a key has an Insert and a Delete in the same batch, they cancel out.
+  // The backward scan leaves the Delete real, and the Insert dummy.
+  // But if the key was never in the tree, deleting it is a no-op that shouldn't increment real_DL/real_DS.
+  // Actually, keeping the Delete real is perfectly safe, it will just write zeroes to an empty path.
+  // Wait! If Insert->Delete, Delete remains real, so real_DS/DL increments! 
+  // But real_I doesn't increment! So net growth is -1! 
+  // But the key was never in the tree, so net growth should be 0!
+  // To fix this, we need a forward scan to track if a Delete is deleting an Insert from the SAME batch.
+  bool seen_insert = false;
+  for (size_t i = 0; i < B; ++i) {
+      bool start_of_key = (i == 0) || !sn::obliv::ct_eq(elems[i].key, elems[i-1].key);
+      seen_insert = sn::obliv::ct_select(false, seen_insert, start_of_key);
+      
+      bool is_insert = sn::obliv::ct_eq(elems[i].op_type, static_cast<uint8_t>(OpType::Insert));
+      bool is_delete = sn::obliv::ct_eq(elems[i].op_type, static_cast<uint8_t>(OpType::Delete));
+      
+      seen_insert = seen_insert | is_insert;
+      
+      // If we see a Delete and we've seen an Insert for this key in the same batch, the Delete becomes dummy
+      bool dummy_delete = is_delete & seen_insert;
+      sn::obliv::ct_set_ref(elems[i].is_dummy, true, dummy_delete);
   }
 
   // Calculate Real Net Growth Obliviously BEFORE Deletes are forced to dummies
