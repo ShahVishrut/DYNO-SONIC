@@ -44,6 +44,8 @@ class ORam {
     Key key;
     Val val; // For Update/Insert
     Block result; // For Search
+    int8_t sub_oram_idx = -1;
+    uint64_t phys_k = 0;
   };
 
   void ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key, bool steady_state = true);
@@ -58,12 +60,7 @@ class ORam {
   const size_t val_len_;
   size_t size_ = 0;
   std::array<std::unique_ptr<PORam>, 2> sub_orams_{};
-  uint8_t SubOramIndex(Key k);
-  uint64_t PhysicalKey(Key k, uint8_t sub_oram_idx);
-  uint64_t ReconstructLogicalKeySmallOblivious(uint64_t phys_k);
-  uint64_t ReconstructLogicalKeyLargeOblivious(uint64_t phys_k);
-  uint64_t ptr_S_ = 0;
-  uint64_t ptr_L_ = 0;
+  std::vector<uint64_t> log_map_[2];
   uint64_t memory_access_count_ = 0;
   uint64_t memory_bytes_moved_total_ = 0;
   uint64_t SubORamsMemoryAccessCountSum();

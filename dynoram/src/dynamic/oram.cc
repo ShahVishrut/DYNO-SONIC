@@ -24,6 +24,8 @@ ORam::ORam(int starting_size_power_of_two, size_t val_len)
   auto base_cap = capacity_;
   sub_orams_[0] = std::make_unique<PORam>(base_cap, val_len, true);
   sub_orams_[1] = std::make_unique<PORam>(base_cap * 2, val_len, true);
+  log_map_[0].resize(base_cap + 1, 0);
+  log_map_[1].resize((base_cap * 2) + 1, 0);
 }
 
 bool IsPowerOfTwo(size_t x) {
@@ -90,23 +92,32 @@ void ORam::Grow(crypto::Key enc_key) {
   ++capacity_;
 }
 
-// Returns 0-value of Val if nothing found.
 Block ORam::ReadAndRemove(Key k, crypto::Key enc_key) {
   assert(1 <= k && k <= capacity_);
   Block res;
   res.val_ = std::make_unique<uint8_t[]>(val_len_);
-  auto idx = SubOramIndex(k);
   auto start_accesses = SubORamsMemoryAccessCountSum();
   auto start_bytes = SubORamsMemoryBytesMovedTotalSum();
+  
+  uint64_t cap_S = sub_orams_[0] ? sub_orams_[0]->Capacity() : 0;
+  uint64_t cap_L = sub_orams_[1] ? sub_orams_[1]->Capacity() : 0;
+  
   for (int i = 0; i < 2; ++i) {
     if (i == 0 && (sub_orams_[i] == nullptr || IsPowerOfTwo(capacity_)))
       continue;
-
-    bool is_real = sn::obliv::ct_eq<uint8_t>(i, idx);
-    uint64_t phys_k = PhysicalKey(k, i);
+      
+    uint64_t cap = (i == 0) ? cap_S : cap_L;
+    uint64_t phys_k = 0;
+    for (uint64_t j = 1; j <= cap; ++j) {
+        bool match = sn::obliv::ct_eq(k, log_map_[i][j]);
+        phys_k = sn::obliv::ct_select<uint64_t>(j, phys_k, match);
+        log_map_[i][j] = sn::obliv::ct_select<uint64_t>(0, log_map_[i][j], match);
+    }
+    
+    bool is_real = (phys_k != 0);
+    phys_k = sn::obliv::ct_select<uint64_t>(phys_k, 1, is_real); // Dummy access to slot 1 if not found
     auto bl = sub_orams_[i]->ReadAndRemove(0, phys_k, enc_key, is_real);
     
-    // We must restore the logical key in the result
     res.key_ = sn::obliv::ct_select<Key>(k, res.key_, is_real && (bl.meta_.key_ != 0));
     if (bl.val_) {
         sn::obliv::ct_select_array(res.val_.get(), bl.val_.get(), res.val_.get(), val_len_, is_real);
@@ -119,20 +130,29 @@ Block ORam::ReadAndRemove(Key k, crypto::Key enc_key) {
   return res;
 }
 
-// Returns 0-value of Val if nothing found.
 Block ORam::Read(Key k, crypto::Key enc_key) {
   assert(1 <= k && k <= capacity_);
   Block res;
   res.val_ = std::make_unique<uint8_t[]>(val_len_);
-  auto idx = SubOramIndex(k);
   auto start_accesses = SubORamsMemoryAccessCountSum();
   auto start_bytes = SubORamsMemoryBytesMovedTotalSum();
+  
+  uint64_t cap_S = sub_orams_[0] ? sub_orams_[0]->Capacity() : 0;
+  uint64_t cap_L = sub_orams_[1] ? sub_orams_[1]->Capacity() : 0;
+  
   for (int i = 0; i < 2; ++i) {
     if (i == 0 && (sub_orams_[i] == nullptr || IsPowerOfTwo(capacity_)))
       continue;
-
-    bool is_real = sn::obliv::ct_eq<uint8_t>(i, idx);
-    uint64_t phys_k = PhysicalKey(k, i);
+      
+    uint64_t cap = (i == 0) ? cap_S : cap_L;
+    uint64_t phys_k = 0;
+    for (uint64_t j = 1; j <= cap; ++j) {
+        bool match = sn::obliv::ct_eq(k, log_map_[i][j]);
+        phys_k = sn::obliv::ct_select<uint64_t>(j, phys_k, match);
+    }
+    
+    bool is_real = (phys_k != 0);
+    phys_k = sn::obliv::ct_select<uint64_t>(phys_k, 1, is_real);
     auto bl = sub_orams_[i]->Read(0, phys_k, enc_key, is_real);
     
     res.key_ = sn::obliv::ct_select<Key>(k, res.key_, is_real && (bl.meta_.key_ != 0));
@@ -142,37 +162,34 @@ Block ORam::Read(Key k, crypto::Key enc_key) {
   }
   memory_access_count_ += SubORamsMemoryAccessCountSum() - start_accesses;
   memory_bytes_moved_total_ += SubORamsMemoryBytesMovedTotalSum() - start_bytes;
-  if (k <= 20) {
-    std::cout << "[DEBUG] ORam::Read k=" << k << " idx=" << (int)idx << " phys_k_S=" << PhysicalKey(k,0) << " phys_k_L=" << PhysicalKey(k,1)
-              << " res.key_=" << res.key_;
-    if (res.val_) std::cout << " val[0]=" << (int)res.val_.get()[0];
-    std::cout << " ptr_S_=" << ptr_S_ << " ptr_L_=" << ptr_L_ << " capacity_=" << capacity_
-              << " cap_S=" << (sub_orams_[0] ? sub_orams_[0]->Capacity() : 0) << " cap_L=" << (sub_orams_[1] ? sub_orams_[1]->Capacity() : 0)
-              << std::endl;
-  }
   return res;
 }
 
 void ORam::Insert(Key k, Val v, crypto::Key enc_key) {
   assert(1 <= k && k <= capacity_);
-  auto idx = SubOramIndex(k);
   auto start_accesses = SubORamsMemoryAccessCountSum();
   auto start_bytes = SubORamsMemoryBytesMovedTotalSum();
   
+  uint64_t cap_L = sub_orams_[1] ? sub_orams_[1]->Capacity() : 0;
+  
+  uint64_t phys_k = 0;
+  for (uint64_t i = 1; i <= cap_L; ++i) {
+      bool is_empty = (log_map_[1][i] == 0);
+      bool select_this = is_empty && (phys_k == 0);
+      phys_k = sn::obliv::ct_select<uint64_t>(i, phys_k, select_this);
+      log_map_[1][i] = sn::obliv::ct_select<uint64_t>(k, log_map_[1][i], select_this);
+  }
+  
   for (int i = 0; i < 2; ++i) {
-    if (sub_orams_[i] == nullptr)
-      continue;
-
-    bool is_real = sn::obliv::ct_eq<uint8_t>(i, idx);
+    if (sub_orams_[i] == nullptr) continue;
+    bool is_real = (i == 1);
+    uint64_t target_phys_k = sn::obliv::ct_select<uint64_t>(phys_k, 1, is_real);
     
-    // We must pass a static_path_oram::Block to SonicORamAdapter
-    uint64_t phys_k = PhysicalKey(k, i);
-    static_path_oram::Block b(0, phys_k);
+    static_path_oram::Block b(0, target_phys_k);
     if (v) {
         b.val_ = std::make_unique<uint8_t[]>(val_len_);
         std::copy(v.get(), v.get() + val_len_, b.val_.get());
     }
-    
     sub_orams_[i]->Insert(std::move(b), enc_key, is_real);
   }
   ++size_;
@@ -180,44 +197,7 @@ void ORam::Insert(Key k, Val v, crypto::Key enc_key) {
   memory_bytes_moved_total_ += SubORamsMemoryBytesMovedTotalSum() - start_bytes;
 }
 
-uint8_t ORam::SubOramIndex(Key k) {
-  assert(1 <= k && k <= capacity_);
-  if (capacity_ == 1 || sub_orams_[0] == nullptr)
-    return 1;
-  
-  bool cond1 = sn::obliv::ct_ge<Key>(k, ptr_S_ + 1);
-  bool cond2 = sn::obliv::ct_le<Key>(k, ptr_S_ + sub_orams_[0]->Capacity());
-  bool in_small = cond1 & cond2;
-  
-  return sn::obliv::ct_select<uint8_t>(0, 1, in_small);
-}
 
-uint64_t ORam::PhysicalKey(Key k, uint8_t sub_oram_idx) {
-    if (k == 0) return 0;
-    int64_t cap_s = sub_orams_[0] ? sub_orams_[0]->Capacity() : 1;
-    int64_t cap_l = sub_orams_[1] ? sub_orams_[1]->Capacity() : 1;
-    
-    uint64_t p_small = ((k - 1) % cap_s) + 1;
-    uint64_t p_large = ((k - 1) % cap_l) + 1;
-    
-    return sn::obliv::ct_select<uint64_t>(p_small, p_large, sn::obliv::ct_eq<uint8_t>(sub_oram_idx, 0));
-}
-
-uint64_t ORam::ReconstructLogicalKeySmallOblivious(uint64_t phys_k) {
-    if (phys_k == 0) return 0;
-    uint64_t cap_s = sub_orams_[0] ? sub_orams_[0]->Capacity() : 1;
-    uint64_t m = (ptr_S_ + cap_s - phys_k) / cap_s;
-    uint64_t res = phys_k + m * cap_s;
-    return res;
-}
-
-uint64_t ORam::ReconstructLogicalKeyLargeOblivious(uint64_t phys_k) {
-    if (phys_k == 0) return 0;
-    uint64_t cap_l = sub_orams_[1] ? sub_orams_[1]->Capacity() : 1;
-    uint64_t m = (ptr_L_ + cap_l - phys_k) / cap_l;
-    uint64_t res = phys_k + m * cap_l;
-    return res;
-}
 
 uint64_t ORam::SubORamsMemoryAccessCountSum() {
   uint64_t res = 0;
@@ -281,6 +261,37 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
     bool is_dummy;
     uint8_t op_type; // 0=Insert, 1=Search, 2=Delete, 3=Update
   };
+  
+  // Pre-Phase: Oblivious Routing via LogMap Scan
+  for (auto& op : batch) {
+      op.sub_oram_idx = -1;
+      op.phys_k = 0;
+  }
+  
+  uint64_t cap_S = sub_orams_[0] ? sub_orams_[0]->Capacity() : 0;
+  uint64_t cap_L = sub_orams_[1] ? sub_orams_[1]->Capacity() : 0;
+  
+  if (cap_S > 0) {
+      for (uint64_t i = 1; i <= cap_S; ++i) {
+          uint64_t log_k = log_map_[0][i];
+          for (auto& op : batch) {
+              bool match = (log_k != 0) && sn::obliv::ct_eq(op.key, log_k);
+              op.sub_oram_idx = sn::obliv::ct_select<int8_t>(0, op.sub_oram_idx, match);
+              op.phys_k = sn::obliv::ct_select<uint64_t>(i, op.phys_k, match);
+          }
+      }
+  }
+  
+  if (cap_L > 0) {
+      for (uint64_t i = 1; i <= cap_L; ++i) {
+          uint64_t log_k = log_map_[1][i];
+          for (auto& op : batch) {
+              bool match = (log_k != 0) && sn::obliv::ct_eq(op.key, log_k);
+              op.sub_oram_idx = sn::obliv::ct_select<int8_t>(1, op.sub_oram_idx, match);
+              op.phys_k = sn::obliv::ct_select<uint64_t>(i, op.phys_k, match);
+          }
+      }
+  }
 
 
   
@@ -418,12 +429,6 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
       has_future_delete = has_future_delete | is_delete;
   }
   
-  // Pass 3: Clean up Insert->Delete pairs
-  // If a key has an Insert and a Delete in the same batch, they cancel out.
-  // The backward scan leaves the Delete real, and the Insert dummy.
-  // But if the key was never in the tree, deleting it is a no-op that shouldn't increment real_DL/real_DS.
-  // Actually, keeping the Delete real is perfectly safe, it will just write zeroes to an empty path.
-  // Wait! If Insert->Delete, Delete remains real, so real_DS/DL increments! 
   // But real_I doesn't increment! So net growth is -1! 
   // But the key was never in the tree, so net growth should be 0!
   // To fix this, we need a forward scan to track if a Delete is deleting an Insert from the SAME batch.
@@ -448,11 +453,32 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
     bool is_real = !elems[i].is_dummy;
     bool is_insert = sn::obliv::ct_eq(elems[i].op_type, static_cast<uint8_t>(OpType::Insert));
     bool is_delete = sn::obliv::ct_eq(elems[i].op_type, static_cast<uint8_t>(OpType::Delete));
-    uint8_t idx = SubOramIndex(elems[i].key);
+    
+    uint32_t orig_idx = elems[i].seq;
+    uint8_t idx = batch[orig_idx].sub_oram_idx;
     
     real_I += sn::obliv::ct_select<size_t>(1, 0, is_real && is_insert);
     real_DS += sn::obliv::ct_select<size_t>(1, 0, is_real && is_delete && (idx == 0));
     real_DL += sn::obliv::ct_select<size_t>(1, 0, is_real && is_delete && (idx == 1));
+  }
+
+  // Allocate empty slots for REAL Inserts in S_large
+  for (size_t i = 0; i < B; ++i) {
+      uint32_t orig_idx = elems[i].seq;
+      bool is_real = !elems[i].is_dummy;
+      bool is_insert = sn::obliv::ct_eq(elems[i].op_type, static_cast<uint8_t>(OpType::Insert));
+      bool needs_slot = is_real && is_insert;
+      
+      uint64_t assigned_slot = 0;
+      for (uint64_t j = 1; j <= cap_L; ++j) {
+          bool is_empty = (log_map_[1][j] == 0);
+          bool select_this = is_empty && (assigned_slot == 0) && needs_slot;
+          assigned_slot = sn::obliv::ct_select<uint64_t>(j, assigned_slot, select_this);
+          log_map_[1][j] = sn::obliv::ct_select<uint64_t>(elems[i].key, log_map_[1][j], select_this);
+      }
+      
+      batch[orig_idx].sub_oram_idx = sn::obliv::ct_select<int8_t>(1, batch[orig_idx].sub_oram_idx, needs_slot);
+      batch[orig_idx].phys_k = sn::obliv::ct_select<uint64_t>(assigned_slot, batch[orig_idx].phys_k, needs_slot);
   }
 
   // Phase 3: O-Sort (Group by OpType, then Dummy)
@@ -476,23 +502,25 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
   std::vector<SonicORamAdapter::AccessOp> small_ops, large_ops;
   size_t original_accesses = original_B - original_inserts;
 
-  for (size_t i = original_accesses; i < original_B; ++i) {
+  for (size_t i = original_accesses; i < B; ++i) {
     Block b;
     bool is_real = !elems[i].is_dummy;
-    b.key_ = sn::obliv::ct_select<uint64_t>(batch[i].key, 0, is_real);
+    uint32_t orig_idx = elems[i].orig_idx;
+    b.key_ = sn::obliv::ct_select<uint64_t>(batch[orig_idx].key, 0, is_real);
     
-    if (batch[i].val) {
+    if (batch[orig_idx].val) {
       b.val_ = std::make_unique<uint8_t[]>(val_len_);
-      std::copy(batch[i].val.get(), batch[i].val.get() + val_len_, b.val_.get());
+      std::copy(batch[orig_idx].val.get(), batch[orig_idx].val.get() + val_len_, b.val_.get());
     }
     inserts.push_back(std::move(b));
   }
 
   for (size_t i = 0; i < original_accesses; ++i) {
-    Key k = batch[i].key;
+    uint32_t orig_idx = elems[i].orig_idx;
+    Key k = batch[orig_idx].key;
     bool is_real = !elems[i].is_dummy;
-    uint8_t idx = SubOramIndex(k);
-    uint8_t op_type = static_cast<uint8_t>(batch[i].type);
+    uint8_t idx = batch[orig_idx].sub_oram_idx;
+    uint8_t op_type = static_cast<uint8_t>(batch[orig_idx].type);
     
     bool is_search = sn::obliv::ct_eq(op_type, static_cast<uint8_t>(OpType::Search));
     bool is_delete = sn::obliv::ct_eq(op_type, static_cast<uint8_t>(OpType::Delete));
@@ -500,25 +528,22 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
     
     bool is_access = is_search || is_delete || is_update;
     
-    uint64_t phys_k_small = PhysicalKey(k, 0);
     SonicORamAdapter::AccessOp op;
-    op.key = phys_k_small;
+    op.key = batch[orig_idx].phys_k;
     op.op_type = op_type;
-    if (batch[i].val) {
+    if (batch[orig_idx].val) {
       op.val = std::make_unique<uint8_t[]>(val_len_);
-      std::copy(batch[i].val.get(), batch[i].val.get() + val_len_, op.val.get());
+      std::copy(batch[orig_idx].val.get(), batch[orig_idx].val.get() + val_len_, op.val.get());
     }
-    
     op.is_real = is_real && is_access && (idx == 0);
     small_ops.push_back(std::move(op));
 
-    uint64_t phys_k_large = PhysicalKey(k, 1);
     SonicORamAdapter::AccessOp op_l;
-    op_l.key = phys_k_large;
+    op_l.key = batch[orig_idx].phys_k;
     op_l.op_type = op_type;
-    if (batch[i].val) {
+    if (batch[orig_idx].val) {
       op_l.val = std::make_unique<uint8_t[]>(val_len_);
-      std::copy(batch[i].val.get(), batch[i].val.get() + val_len_, op_l.val.get());
+      std::copy(batch[orig_idx].val.get(), batch[orig_idx].val.get() + val_len_, op_l.val.get());
     }
     op_l.is_real = is_real && is_access && (idx == 1);
     large_ops.push_back(std::move(op_l));
@@ -528,13 +553,13 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
       std::cout << "[DEBUG] Phase 2: small sub_oram ReadBatch" << std::endl;
       auto read_results = sub_orams_[0]->ReadBatch(small_ops, enc_key, steady_state);
       std::cout << "[DEBUG] Phase 2: small sub_oram ReadBatch done" << std::endl;
-      // Copy read results back to batch for Search operations
       for (size_t i = 0; i < original_accesses; ++i) {
-          if (small_ops[i].is_real && sn::obliv::ct_eq(small_ops[i].op_type, static_cast<uint8_t>(OpType::Search))) {
-              batch[i].result.key_ = read_results[i].meta_.key_;
+          if (small_ops[i].is_real) {
+              uint32_t orig_idx = elems[i].orig_idx;
+              batch[orig_idx].result.key_ = read_results[i].meta_.key_;
               if (read_results[i].val_) {
-                  batch[i].result.val_ = std::make_unique<uint8_t[]>(val_len_);
-                  std::copy(read_results[i].val_.get(), read_results[i].val_.get() + val_len_, batch[i].result.val_.get());
+                  batch[orig_idx].result.val_ = std::make_unique<uint8_t[]>(val_len_);
+                  std::copy(read_results[i].val_.get(), read_results[i].val_.get() + val_len_, batch[orig_idx].result.val_.get());
               }
           }
       }
@@ -543,17 +568,46 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
       std::cout << "[DEBUG] Phase 2: large sub_oram ReadBatch" << std::endl;
       auto read_results = sub_orams_[1]->ReadBatch(large_ops, enc_key, steady_state);
       std::cout << "[DEBUG] Phase 2: large sub_oram ReadBatch done" << std::endl;
-      std::cout << "[DEBUG] Post-Phase 2: large_ops processing start" << std::endl;
       for (size_t i = 0; i < original_accesses; ++i) {
-          if (large_ops[i].is_real && sn::obliv::ct_eq(large_ops[i].op_type, static_cast<uint8_t>(OpType::Search))) {
-              batch[i].result.key_ = read_results[i].meta_.key_;
+          if (large_ops[i].is_real) {
+              uint32_t orig_idx = elems[i].orig_idx;
+              batch[orig_idx].result.key_ = read_results[i].meta_.key_;
               if (read_results[i].val_) {
-                  batch[i].result.val_ = std::make_unique<uint8_t[]>(val_len_);
-                  std::copy(read_results[i].val_.get(), read_results[i].val_.get() + val_len_, batch[i].result.val_.get());
+                  batch[orig_idx].result.val_ = std::make_unique<uint8_t[]>(val_len_);
+                  std::copy(read_results[i].val_.get(), read_results[i].val_.get() + val_len_, batch[orig_idx].result.val_.get());
               }
           }
       }
-      std::cout << "[DEBUG] Post-Phase 2: large_ops processing end" << std::endl;
+  }
+
+  // Phase 2.5: Post-ReadBatch backward scan to propagate old values to dummy Searches
+  std::vector<uint8_t> old_payload(val_len_, 0);
+  bool has_old_payload = false;
+  
+  for (int64_t i = original_accesses - 1; i >= 0; --i) {
+      bool end_of_key = (i == static_cast<int64_t>(original_accesses) - 1) || !sn::obliv::ct_eq(elems[i].key, elems[i+1].key);
+      has_old_payload = sn::obliv::ct_select(false, has_old_payload, end_of_key);
+      
+      uint32_t orig_idx = elems[i].orig_idx;
+      bool is_real = !elems[i].is_dummy;
+      bool is_search = sn::obliv::ct_eq(elems[i].op_type, static_cast<uint8_t>(OpType::Search));
+      
+      if (val_len_ > 0) {
+          sn::obliv::ct_select_array(old_payload.data(), batch[orig_idx].result.val_.get(), old_payload.data(), val_len_, is_real);
+      }
+      has_old_payload = has_old_payload | is_real;
+      
+      bool needs_old_payload = is_search & !is_real & has_old_payload;
+      
+      if (val_len_ > 0) {
+          if (!batch[orig_idx].result.val_) {
+              batch[orig_idx].result.val_ = std::make_unique<uint8_t[]>(val_len_);
+          }
+          sn::obliv::ct_select_array(batch[orig_idx].result.val_.get(), old_payload.data(), batch[orig_idx].result.val_.get(), val_len_, needs_old_payload);
+      }
+      
+      bool is_real_search = is_real & is_search;
+      batch[orig_idx].result.key_ = sn::obliv::ct_select<Key>(batch[orig_idx].key, batch[orig_idx].result.key_, is_real_search);
   }
 
   if (sub_orams_[1]) {
@@ -567,7 +621,21 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
         if (idx % 100 == 0 || idx > 510) {
             std::cout << "  [DEBUG] Loop iter " << idx << " start, key=" << b.key_ << std::endl;
         }
-        uint64_t phys_k = PhysicalKey(b.key_, 1);
+        
+        // Find the phys_k for this insert using the pre-assigned batch values
+        // We must scan the batch array to find the op with this key to get its phys_k
+        // Actually, since inserts correspond to the elements at the END of elems array!
+        // The loop is over `inserts`, which was populated from `elems` at indices original_accesses to B.
+        // Let's just use the orig_idx!
+        // Wait, b.key_ is the logic_key, not orig_idx.
+        // Let's modify the `inserts` population logic to store phys_k directly!
+        uint64_t phys_k = 0;
+        for (size_t j = original_accesses; j < B; ++j) {
+            uint32_t orig_idx = elems[j].orig_idx;
+            bool match = sn::obliv::ct_eq(b.key_, batch[orig_idx].key);
+            phys_k = sn::obliv::ct_select(batch[orig_idx].phys_k, phys_k, match);
+        }
+        
         static_path_oram::Block new_b(static_cast<static_path_oram::Pos>(0), static_cast<static_path_oram::Key>(phys_k));
         if (b.val_) {
             new_b.val_ = std::move(b.val_);
@@ -583,18 +651,18 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
 
   // Phase 4: Oblivious Net Growth & Boundary Checking
   int64_t a = real_I - real_DS - real_DL;
-  int64_t x = sub_orams_[0] ? sub_orams_[0]->Capacity() : 0;
-  int64_t y = sub_orams_[1] ? sub_orams_[1]->Capacity() : 0;
+  int64_t x = cap_S;
+  int64_t y = cap_L;
 
   int64_t target_small = x - a;
   int64_t target_large = y + 2*a;
 
-  int64_t k_transfer = a - real_DS;
+  int64_t k_transfer = a;
   bool scale_up = false, scale_down = false;
   int64_t T = 0;
 
   if (target_small <= 0) {
-    k_transfer = x - real_DS;
+    k_transfer = x;
     T = x;
     scale_up = true;
   } else if (target_large <= 0) {
@@ -608,190 +676,170 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
     T = std::max(std::abs(B_size - a), std::abs(a));
   }
 
-  // Phase 4: Oblivious Buffer Swapping & Transfer (via SONIC Global Stashes)
+  // Phase 4: Exact Transfer via LogMap
   if (sub_orams_[0] && sub_orams_[1] && T > 0) {
     std::cout << "[DEBUG] Phase 4 Start. T=" << T << " k_transfer=" << k_transfer << std::endl;
-    // 1. Pad T to power of 2 for OCompact
     int64_t T_pow2 = 1;
     while (T_pow2 < T) T_pow2 *= 2;
 
-    auto filter_S = [this, k_transfer](Key phys_k) {
-        if (k_transfer <= 0) return false;
-        return phys_k <= static_cast<Key>(k_transfer);
-    };
+    auto no_filter = [](Key phys_k) { return true; };
+    std::vector<Key> extracted;
+    std::vector<std::pair<Key, bool>> keys_to_read;
     
-    auto filter_L = [this, k_transfer](Key phys_k) {
-        if (k_transfer >= 0) return false;
-        Key log_k = ReconstructLogicalKeyLargeOblivious(phys_k);
-        int64_t diff_s_new = static_cast<int64_t>(log_k - 1) - static_cast<int64_t>(ptr_S_ + k_transfer);
-        return diff_s_new >= 0 && diff_s_new < -k_transfer;
-    };
+    if (k_transfer > 0) {
+        extracted = sub_orams_[0]->ObliviousExtractValidKeys(k_transfer, T, no_filter);
+    } else if (k_transfer < 0) {
+        extracted = sub_orams_[1]->ObliviousExtractValidKeys(-k_transfer, T, no_filter);
+    } else {
+        extracted.resize(T, 0);
+    }
 
-    std::vector<Key> S_extracted = sub_orams_[0]->ObliviousExtractValidKeys(std::max<int64_t>(0, k_transfer), T, filter_S);
-    std::vector<Key> L_extracted = sub_orams_[1]->ObliviousExtractValidKeys(std::max<int64_t>(0, -k_transfer), T, filter_L);
-    
-    std::cout << "[DEBUG] Phase 4 extracted keys" << std::endl;
-
-    // 2. Read into global Buffers
-    std::vector<std::pair<Key, bool>> keys_S, keys_L;
     for (int64_t i = 0; i < T; ++i) {
-        keys_S.push_back({S_extracted[i], S_extracted[i] != 0});
-        keys_L.push_back({L_extracted[i], L_extracted[i] != 0});
+        keys_to_read.push_back({extracted[i], extracted[i] != 0});
     }
 
-    std::cout << "[DEBUG] Phase 4 extracting BufferS" << std::endl;
-    std::vector<static_path_oram::Block> BufferS = sub_orams_[0]->ReadAndRemoveBatch(keys_S, enc_key);
-    std::cout << "[DEBUG] Phase 4 extracting BufferL" << std::endl;
-    std::vector<static_path_oram::Block> BufferL = sub_orams_[1]->ReadAndRemoveBatch(keys_L, enc_key);
-    std::cout << "[DEBUG] Phase 4 Buffers extracted" << std::endl;
-
-    // Pad buffers to T_pow2 with pure dummies
-    for (uint64_t i = T; i < T_pow2; ++i) {
-        BufferS.emplace_back(true);
-        if (val_len_ > 0) {
-            BufferS.back().val_ = std::make_unique<uint8_t[]>(val_len_);
-            std::fill(BufferS.back().val_.get(), BufferS.back().val_.get() + val_len_, 0);
+    std::vector<static_path_oram::Block> Buffer;
+    if (k_transfer > 0) Buffer = sub_orams_[0]->ReadAndRemoveBatch(keys_to_read, enc_key);
+    else if (k_transfer < 0) Buffer = sub_orams_[1]->ReadAndRemoveBatch(keys_to_read, enc_key);
+    
+    if (k_transfer != 0) {
+        for (int64_t i = T; i < T_pow2; ++i) {
+            Buffer.emplace_back(true);
+            if (val_len_ > 0) {
+                Buffer.back().val_ = std::make_unique<uint8_t[]>(val_len_);
+                std::fill(Buffer.back().val_.get(), Buffer.back().val_.get() + val_len_, 0);
+            }
         }
-        BufferL.emplace_back(true);
-        if (val_len_ > 0) {
-            BufferL.back().val_ = std::make_unique<uint8_t[]>(val_len_);
-            std::fill(BufferL.back().val_.get(), BufferL.back().val_.get() + val_len_, 0);
+        
+        uint64_t from_cap = (k_transfer > 0) ? cap_S : cap_L;
+        uint64_t to_cap = (k_transfer > 0) ? cap_L : cap_S;
+        auto& from_map = (k_transfer > 0) ? log_map_[0] : log_map_[1];
+        auto& to_map = (k_transfer > 0) ? log_map_[1] : log_map_[0];
+        
+        for (int64_t i = 0; i < T; ++i) {
+            uint64_t old_phys_k = Buffer[i].meta_.key_;
+            bool is_valid = (old_phys_k != 0);
+            
+            uint64_t log_k = 0;
+            for (uint64_t j = 1; j <= from_cap; ++j) {
+                bool match = is_valid && sn::obliv::ct_eq(j, old_phys_k);
+                log_k = sn::obliv::ct_select(from_map[j], log_k, match);
+                from_map[j] = sn::obliv::ct_select<uint64_t>(0, from_map[j], match);
+            }
+            
+            uint64_t new_phys_k = 0;
+            for (uint64_t j = 1; j <= to_cap; ++j) {
+                bool is_empty = (to_map[j] == 0);
+                bool select_this = is_valid && is_empty && (new_phys_k == 0);
+                new_phys_k = sn::obliv::ct_select(j, new_phys_k, select_this);
+                to_map[j] = sn::obliv::ct_select(log_k, to_map[j], select_this);
+            }
+            
+            Buffer[i].meta_.key_ = new_phys_k;
         }
+        
+        if (k_transfer > 0) sub_orams_[1]->InsertBatch(Buffer, enc_key, true);
+        else sub_orams_[0]->InsertBatch(Buffer, enc_key, true);
     }
-
-    // Translate physical keys back to logical keys BEFORE swapping
-    for (uint64_t i = 0; i < T; ++i) {
-        if (BufferS[i].meta_.key_ != 0) {
-            BufferS[i].meta_.key_ = ReconstructLogicalKeySmallOblivious(BufferS[i].meta_.key_);
-        }
-        if (BufferL[i].meta_.key_ != 0) {
-            BufferL[i].meta_.key_ = ReconstructLogicalKeyLargeOblivious(BufferL[i].meta_.key_);
-        }
-    }
-
-    // 3. Oblivious Compaction
-    OCompact(BufferS, 0, T_pow2, val_len_);
-    OCompact(BufferL, 0, T_pow2, val_len_);
-
-    // 4. Double-Oblivious Swapping
-    for (uint64_t i = 0; i < T; ++i) {
-        bool swap_pos = (k_transfer > 0) && (i < static_cast<uint64_t>(k_transfer));
-        bool swap_neg = (k_transfer < 0) && (i < static_cast<uint64_t>(-k_transfer));
-        bool should_swap = swap_pos | swap_neg;
-        ObliviousSwapBlock(BufferS[i], BufferL[i], should_swap, val_len_);
-    }
-
-    // Truncate padded dummies before inserting
-    BufferS.erase(BufferS.begin() + T, BufferS.end());
-    BufferL.erase(BufferL.begin() + T, BufferL.end());
-
-    // 5. Address Translation (MUST happen before physical key mapping)
-    ptr_S_ += std::max(static_cast<int64_t>(0), k_transfer);
-    ptr_L_ += std::max(static_cast<int64_t>(0), -k_transfer);
+    
     capacity_ += a;
-
-    // 6. Translate logical keys back to physical keys for destination AFTER swapping
-    for (uint64_t i = 0; i < T; ++i) {
-        if (BufferS[i].meta_.key_ != 0) BufferS[i].meta_.key_ = PhysicalKey(BufferS[i].meta_.key_, 0);
-        if (BufferL[i].meta_.key_ != 0) BufferL[i].meta_.key_ = PhysicalKey(BufferL[i].meta_.key_, 1);
-    }
-
-    // 7. Flush to Stashes
-    std::cout << "[DEBUG] Phase 4 inserting BufferS" << std::endl;
-    sub_orams_[0]->InsertBatch(BufferS, enc_key, true);
-    std::cout << "[DEBUG] Phase 4 inserting BufferL" << std::endl;
-    sub_orams_[1]->InsertBatch(BufferL, enc_key, true);
-    std::cout << "[DEBUG] Phase 4 complete. capacity_=" << capacity_ << " ptr_S_=" << ptr_S_ << " ptr_L_=" << ptr_L_ << std::endl;
   }
 
-  // Phase 5: Cascading Resizing & Secondary Transfer
+  // Phase 5: Simple Structural Scale Up/Down with Secondary Transfers
   if (scale_up) {
-    // Phase 5 scale_up: 
-    // The old ORAM L (now slightly overstuffed) becomes the new ORAM S.
-    // A new double-sized ORAM L is allocated.
     int64_t old_y = sub_orams_[1]->Capacity();
     int64_t excess = std::max<int64_t>(0, static_cast<int64_t>(capacity_) - old_y);
     int64_t k_sec = 2 * excess;
-
-    uint64_t old_ptr_S = ptr_L_; // old_ptr_L becomes the base for new S
-
+    
     sub_orams_[0] = std::move(sub_orams_[1]);
     sub_orams_[1] = std::make_unique<PORam>(2 * old_y, val_len_, true);
-    std::swap(ptr_S_, ptr_L_);
-    ptr_S_ += k_sec; // Advance ptr_S_ to maintain the N-j and 2j invariant!
     
-    std::vector<std::pair<Key, bool>> keys_to_move;
-    for (uint64_t i = 1; i <= static_cast<uint64_t>(k_sec); ++i) {
-        Key log_k = old_ptr_S + i;
-        Key phys_k = PhysicalKey(log_k, 0); // They are currently in the new S
-        keys_to_move.push_back({phys_k, true});
-    }
+    log_map_[0] = std::move(log_map_[1]);
+    log_map_[1].clear();
+    log_map_[1].resize((2 * old_y) + 1, 0);
     
-    if (!keys_to_move.empty()) {
-        std::cout << "[DEBUG] Phase 5 transferring " << keys_to_move.size() << " keys to new L" << std::endl;
-        std::cout << "[DEBUG] Phase 5 state: ptr_S_=" << ptr_S_ << " ptr_L_=" << ptr_L_ 
-                  << " cap_S=" << sub_orams_[0]->Capacity() << " cap_L=" << sub_orams_[1]->Capacity() 
-                  << " old_ptr_S=" << old_ptr_S << std::endl;
-        for (size_t dbg = 0; dbg < keys_to_move.size(); ++dbg) {
-            std::cout << "[DEBUG] Phase 5 extract key[" << dbg << "]: phys_k=" << keys_to_move[dbg].first << std::endl;
-        }
-        auto extracted_blocks = sub_orams_[0]->ReadAndRemoveBatch(keys_to_move, enc_key);
+    if (k_sec > 0) {
+        auto no_filter = [](Key phys_k) { return true; };
+        std::vector<Key> extracted = sub_orams_[0]->ObliviousExtractValidKeys(k_sec, k_sec, no_filter);
         
-        for (size_t i = 0; i < extracted_blocks.size(); ++i) {
-            auto& b = extracted_blocks[i];
-            std::cout << "[DEBUG] Phase 5 extracted[" << i << "]: meta_.key_=" << b.meta_.key_ 
-                      << " meta_.pos_=" << b.meta_.pos_;
-            if (b.val_) std::cout << " val[0]=" << (int)b.val_.get()[0];
-            std::cout << std::endl;
+        std::vector<std::pair<Key, bool>> keys_to_read;
+        for (int64_t i = 0; i < k_sec; ++i) {
+            keys_to_read.push_back({extracted[i], extracted[i] != 0});
         }
         
-        // Translate back to logical, then to L's physical keys
-        for (size_t i = 0; i < extracted_blocks.size(); ++i) {
-            auto& b = extracted_blocks[i];
-            if (b.meta_.key_ != 0) {
-                Key log_k = old_ptr_S + i + 1; // Uniquely known
-                Key new_phys = PhysicalKey(log_k, 1);
-                std::cout << "[DEBUG] Phase 5 remap[" << i << "]: old_phys=" << b.meta_.key_ << " -> log_k=" << log_k << " -> new_phys=" << new_phys << std::endl;
-                b.meta_.key_ = new_phys;
+        std::vector<static_path_oram::Block> Buffer = sub_orams_[0]->ReadAndRemoveBatch(keys_to_read, enc_key);
+        
+        for (int64_t i = 0; i < k_sec; ++i) {
+            uint64_t old_phys_k = Buffer[i].meta_.key_;
+            bool is_valid = (old_phys_k != 0);
+            
+            uint64_t log_k = 0;
+            for (uint64_t j = 1; j <= old_y; ++j) {
+                bool match = is_valid && sn::obliv::ct_eq(j, old_phys_k);
+                log_k = sn::obliv::ct_select(log_map_[0][j], log_k, match);
+                log_map_[0][j] = sn::obliv::ct_select<uint64_t>(0, log_map_[0][j], match);
             }
+            
+            uint64_t new_phys_k = 0;
+            for (uint64_t j = 1; j <= 2 * old_y; ++j) {
+                bool is_empty = (log_map_[1][j] == 0);
+                bool select_this = is_valid && is_empty && (new_phys_k == 0);
+                new_phys_k = sn::obliv::ct_select(j, new_phys_k, select_this);
+                log_map_[1][j] = sn::obliv::ct_select(log_k, log_map_[1][j], select_this);
+            }
+            
+            Buffer[i].meta_.key_ = new_phys_k;
         }
-        sub_orams_[1]->InsertBatch(extracted_blocks, enc_key, true);
+        sub_orams_[1]->InsertBatch(Buffer, enc_key, true);
     }
-    std::cout << "[DEBUG] Phase 5 scale_up complete. capacity_=" << capacity_ << " ptr_S_=" << ptr_S_ << " ptr_L_=" << ptr_L_ 
-              << " cap_S=" << sub_orams_[0]->Capacity() << " cap_L=" << sub_orams_[1]->Capacity() << std::endl;
+    std::cout << "[DEBUG] Phase 5 scale_up complete. capacity_=" << capacity_ << std::endl;
   } else if (scale_down) {
     int64_t old_x = sub_orams_[0]->Capacity();
     int64_t deficit = std::max<int64_t>(0, old_x - static_cast<int64_t>(capacity_));
     int64_t k_sec = deficit;
     
-    std::swap(ptr_S_, ptr_L_);
-    ptr_S_ -= k_sec; // Shift pointer backwards to absorb deficit
-    
-    std::vector<std::pair<Key, bool>> keys_to_move;
-    for (uint64_t i = 1; i <= static_cast<uint64_t>(k_sec); ++i) {
-        Key log_k = ptr_S_ + i;
-        Key phys_k = PhysicalKey(log_k, 1); // They are currently in the new L
-        keys_to_move.push_back({phys_k, true});
-    }
-    
-    if (!keys_to_move.empty()) {
-        std::cout << "[DEBUG] Phase 5 transferring " << keys_to_move.size() << " keys to new S" << std::endl;
-        auto extracted_blocks = sub_orams_[1]->ReadAndRemoveBatch(keys_to_move, enc_key);
-        
-        // Translate back to logical, then to S's physical keys
-        for (size_t i = 0; i < extracted_blocks.size(); ++i) {
-            auto& b = extracted_blocks[i];
-            if (b.meta_.key_ != 0) {
-                Key log_k = ptr_S_ + i + 1; // Uniquely known
-                b.meta_.key_ = PhysicalKey(log_k, 0);
-            }
-        }
-        sub_orams_[0]->InsertBatch(extracted_blocks, enc_key, true);
-    }
-    
     sub_orams_[1] = std::move(sub_orams_[0]);
     sub_orams_[0] = std::make_unique<PORam>(old_x / 2, val_len_, true);
-    std::cout << "[DEBUG] Phase 5 scale_down complete" << std::endl;
+    
+    log_map_[1] = std::move(log_map_[0]);
+    log_map_[0].clear();
+    log_map_[0].resize((old_x / 2) + 1, 0);
+
+    if (k_sec > 0) {
+        auto no_filter = [](Key phys_k) { return true; };
+        std::vector<Key> extracted = sub_orams_[1]->ObliviousExtractValidKeys(k_sec, k_sec, no_filter);
+        
+        std::vector<std::pair<Key, bool>> keys_to_read;
+        for (int64_t i = 0; i < k_sec; ++i) {
+            keys_to_read.push_back({extracted[i], extracted[i] != 0});
+        }
+        
+        std::vector<static_path_oram::Block> Buffer = sub_orams_[1]->ReadAndRemoveBatch(keys_to_read, enc_key);
+        
+        for (int64_t i = 0; i < k_sec; ++i) {
+            uint64_t old_phys_k = Buffer[i].meta_.key_;
+            bool is_valid = (old_phys_k != 0);
+            
+            uint64_t log_k = 0;
+            for (uint64_t j = 1; j <= old_x; ++j) {
+                bool match = is_valid && sn::obliv::ct_eq(j, old_phys_k);
+                log_k = sn::obliv::ct_select(log_map_[1][j], log_k, match);
+                log_map_[1][j] = sn::obliv::ct_select<uint64_t>(0, log_map_[1][j], match);
+            }
+            
+            uint64_t new_phys_k = 0;
+            for (uint64_t j = 1; j <= old_x / 2; ++j) {
+                bool is_empty = (log_map_[0][j] == 0);
+                bool select_this = is_valid && is_empty && (new_phys_k == 0);
+                new_phys_k = sn::obliv::ct_select(j, new_phys_k, select_this);
+                log_map_[0][j] = sn::obliv::ct_select(log_k, log_map_[0][j], select_this);
+            }
+            
+            Buffer[i].meta_.key_ = new_phys_k;
+        }
+        sub_orams_[0]->InsertBatch(Buffer, enc_key, true);
+    }
+    std::cout << "[DEBUG] Phase 5 scale_down complete. capacity_=" << capacity_ << std::endl;
   }
 
   if (B > original_B) {
