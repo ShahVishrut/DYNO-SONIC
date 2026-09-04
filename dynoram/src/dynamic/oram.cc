@@ -262,38 +262,8 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
     uint8_t op_type; // 0=Insert, 1=Search, 2=Delete, 3=Update
   };
   
-  // Pre-Phase: Oblivious Routing via LogMap Scan
-  for (auto& op : batch) {
-      op.sub_oram_idx = -1;
-      op.phys_k = 0;
-  }
-  
   uint64_t cap_S = sub_orams_[0] ? sub_orams_[0]->Capacity() : 0;
   uint64_t cap_L = sub_orams_[1] ? sub_orams_[1]->Capacity() : 0;
-  
-  if (cap_S > 0) {
-      for (uint64_t i = 1; i <= cap_S; ++i) {
-          uint64_t log_k = log_map_[0][i];
-          for (auto& op : batch) {
-              bool match = (log_k != 0) && sn::obliv::ct_eq(static_cast<uint64_t>(op.key), log_k);
-              op.sub_oram_idx = sn::obliv::ct_select<int8_t>(0, op.sub_oram_idx, match);
-              op.phys_k = sn::obliv::ct_select<uint64_t>(i, op.phys_k, match);
-          }
-      }
-  }
-  
-  if (cap_L > 0) {
-      for (uint64_t i = 1; i <= cap_L; ++i) {
-          uint64_t log_k = log_map_[1][i];
-          for (auto& op : batch) {
-              bool match = (log_k != 0) && sn::obliv::ct_eq(static_cast<uint64_t>(op.key), log_k);
-              op.sub_oram_idx = sn::obliv::ct_select<int8_t>(1, op.sub_oram_idx, match);
-              op.phys_k = sn::obliv::ct_select<uint64_t>(i, op.phys_k, match);
-          }
-      }
-  }
-
-
   
   std::vector<OblivElem> elems(B);
   for (size_t i = 0; i < B; ++i) {
@@ -350,6 +320,36 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
   // even after the later std::sort reorders elems without touching batch.
   for (size_t i = 0; i < B; ++i) {
       elems[i].seq = static_cast<uint32_t>(i);
+  }
+
+  // Pre-Phase: Oblivious Routing via LogMap Scan
+  // MUST happen after bitonic sort because the hook only co-sorts .type/.key/.val,
+  // not .phys_k/.sub_oram_idx. Routing here ensures alignment with the sorted batch.
+  for (auto& op : batch) {
+      op.sub_oram_idx = -1;
+      op.phys_k = 0;
+  }
+  
+  if (cap_S > 0) {
+      for (uint64_t i = 1; i <= cap_S; ++i) {
+          uint64_t log_k = log_map_[0][i];
+          for (auto& op : batch) {
+              bool match = (log_k != 0) && sn::obliv::ct_eq(static_cast<uint64_t>(op.key), log_k);
+              op.sub_oram_idx = sn::obliv::ct_select<int8_t>(0, op.sub_oram_idx, match);
+              op.phys_k = sn::obliv::ct_select<uint64_t>(i, op.phys_k, match);
+          }
+      }
+  }
+  
+  if (cap_L > 0) {
+      for (uint64_t i = 1; i <= cap_L; ++i) {
+          uint64_t log_k = log_map_[1][i];
+          for (auto& op : batch) {
+              bool match = (log_k != 0) && sn::obliv::ct_eq(static_cast<uint64_t>(op.key), log_k);
+              op.sub_oram_idx = sn::obliv::ct_select<int8_t>(1, op.sub_oram_idx, match);
+              op.phys_k = sn::obliv::ct_select<uint64_t>(i, op.phys_k, match);
+          }
+      }
   }
 
   // Phase 2: O-Scan (Collapse) using Two Passes
