@@ -685,7 +685,7 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
             phys_k = sn::obliv::ct_select(batch[orig_idx].phys_k, phys_k, match);
         }
         
-        static_path_oram::Block new_b(static_cast<static_path_oram::Pos>(0), static_cast<static_path_oram::Key>(phys_k));
+        static_path_oram::Block new_b(static_cast<static_path_oram::Pos>(phys_k), static_cast<static_path_oram::Key>(phys_k));
         if (b.val_) {
             new_b.val_ = std::move(b.val_);
         }
