@@ -754,15 +754,12 @@ void SonicORamAdapter::InsertBatch(std::vector<static_path_oram::Block>& blocks,
                           sn::oram::tree::block<kSonicBlockBytes> new_block{};
                           new_block.address = k - 1;
                           new_block.leaf_ix = batch_new_leaves[j];
-                          if (k <= 20) {
-                              std::cout << "[DEBUG] SonicInsert k=" << k << " in_buf[0..23]=";
-                              for(int db=0; db<24; ++db) std::cout << " " << (int)in_buf[db];
-                              std::cout << std::endl;
-                          }
                           std::copy(in_buf.begin(), in_buf.end(), new_block.data.begin());
                           {
+                              std::cout << "[DEBUG] SonicORamAdapter::InsertBatch calling insert for address " << new_block.address << std::endl;
                               std::lock_guard<std::mutex> client_lock(ops_mutex);
                               impl_->client->insert(new_block);
+                              std::cout << "[DEBUG] SonicORamAdapter::InsertBatch finished insert" << std::endl;
                           }
                       } else {
                           sn::oram::access_request req;
@@ -774,8 +771,10 @@ void SonicORamAdapter::InsertBatch(std::vector<static_path_oram::Block>& blocks,
                           req.out = sn::util::span<uint8_t>(out_buf);
                           
                           {
+                              std::cout << "[DEBUG] SonicORamAdapter::InsertBatch calling access for address " << req.address << " real=" << real << std::endl;
                               std::lock_guard<std::mutex> client_lock(ops_mutex);
                               impl_->client->access(req, tl_scratch);
+                              std::cout << "[DEBUG] SonicORamAdapter::InsertBatch finished access" << std::endl;
                           }
                       }
                       auto post_ops = impl_->client->state_ref().metrics_snapshot().access_ops;
