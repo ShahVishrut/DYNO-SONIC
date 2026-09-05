@@ -22,6 +22,7 @@ class OHeap {
   // Only implemented for benchmarks.
   OHeap(int starting_size_power_of_two, size_t val_len);
   void Grow(crypto::Key enc_key);
+  void FillWithDummies(crypto::Key enc_key);
   void Shrink(crypto::Key enc_key);
   void Insert(Key k, Val v, crypto::Key enc_key, bool pad = true);
   Block FindMin(crypto::Key enc_key, bool pad = true);
