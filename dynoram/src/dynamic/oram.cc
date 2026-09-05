@@ -387,6 +387,7 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
           }
           sn::obliv::ct_select_array(batch[i].result.val_.get(), current_payload.data(), batch[i].result.val_.get(), val_len_, forward_to_search);
       }
+      batch[i].result.key_ = sn::obliv::ct_select<uint64_t>(1, batch[i].result.key_, forward_to_search);
       // If a search receives a forwarded payload, or if it searches a deleted key, it becomes dummy.
       // If an update targets a deleted key, it is a no-op and also becomes dummy.
       bool search_becomes_dummy = (is_search & has_payload) | (is_search & is_deleted);
@@ -399,16 +400,20 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
   // and propagates the final payload backwards to it.
   bool has_future_write = false;
   bool has_future_delete = false;
+  bool has_future_access = false;
   std::vector<uint8_t> backward_payload(val_len_, 0);
   
   for (int64_t i = B - 1; i >= 0; --i) {
       bool end_of_key = (i == B - 1) || !sn::obliv::ct_eq(elems[i].key, elems[i+1].key);
       has_future_write = sn::obliv::ct_select(false, has_future_write, end_of_key);
       has_future_delete = sn::obliv::ct_select(false, has_future_delete, end_of_key);
+      has_future_access = sn::obliv::ct_select(false, has_future_access, end_of_key);
       
       bool is_insert = sn::obliv::ct_eq(elems[i].op_type, static_cast<uint8_t>(OpType::Insert));
       bool is_update = sn::obliv::ct_eq(elems[i].op_type, static_cast<uint8_t>(OpType::Update));
       bool is_delete = sn::obliv::ct_eq(elems[i].op_type, static_cast<uint8_t>(OpType::Delete));
+      bool is_search = sn::obliv::ct_eq(elems[i].op_type, static_cast<uint8_t>(OpType::Search));
+      bool is_access = is_search | is_update | is_delete;
       
       // If this is the FIRST write we see going backwards, it captures the payload
       bool captures_payload = (is_insert | is_update) & !has_future_write & !has_future_delete;
@@ -420,6 +425,8 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
       bool overshadowed = (is_insert | is_update) & (has_future_write | has_future_delete);
       // Deletes are ONLY overshadowed by future deletes, NEVER by future writes (which allocate new slots)
       overshadowed = overshadowed | (is_delete & has_future_delete);
+      // Searches are overshadowed by any future access
+      overshadowed = overshadowed | (is_search & has_future_access);
       
       // Exception: If this is an Insert, and there are future Updates, the Insert MUST remain real 
       // (to be processed by InsertBatch and increment real_I). 
@@ -438,6 +445,7 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
       has_future_write = has_future_write | is_insert | is_update;
       has_future_delete = sn::obliv::ct_select(false, has_future_delete, is_insert); // Insert cancels future delete
       has_future_delete = has_future_delete | is_delete;
+      has_future_access = has_future_access | is_access;
   }
   
   // But real_I doesn't increment! So net growth is -1! 
@@ -617,11 +625,13 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
 
   // Phase 2.5: Post-ReadBatch backward scan to propagate old values to dummy Searches
   std::vector<uint8_t> old_payload(val_len_, 0);
+  uint64_t old_key = 0;
   bool has_old_payload = false;
   
   for (int64_t i = original_accesses - 1; i >= 0; --i) {
       bool end_of_key = (i == static_cast<int64_t>(original_accesses) - 1) || !sn::obliv::ct_eq(elems[i].key, elems[i+1].key);
       has_old_payload = sn::obliv::ct_select(false, has_old_payload, end_of_key);
+      old_key = sn::obliv::ct_select<uint64_t>(0, old_key, end_of_key);
       
       uint32_t orig_idx = elems[i].seq;
       bool is_real = !elems[i].is_dummy;
@@ -630,9 +640,11 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
       if (val_len_ > 0) {
           sn::obliv::ct_select_array(old_payload.data(), batch[orig_idx].result.val_.get(), old_payload.data(), val_len_, is_real);
       }
+      old_key = sn::obliv::ct_select<uint64_t>(batch[orig_idx].result.key_, old_key, is_real);
       has_old_payload = has_old_payload | is_real;
       
-      bool needs_old_payload = is_search & !is_real & has_old_payload;
+      bool received_forward = sn::obliv::ct_eq<uint64_t>(batch[orig_idx].result.key_, 1);
+      bool needs_old_payload = is_search & !is_real & has_old_payload & !received_forward;
       
       if (val_len_ > 0) {
           if (!batch[orig_idx].result.val_) {
@@ -641,8 +653,10 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
           sn::obliv::ct_select_array(batch[orig_idx].result.val_.get(), old_payload.data(), batch[orig_idx].result.val_.get(), val_len_, needs_old_payload);
       }
       
-      bool is_real_search = is_real & is_search;
-      batch[orig_idx].result.key_ = sn::obliv::ct_select<Key>(batch[orig_idx].key, batch[orig_idx].result.key_, is_real_search);
+      uint64_t final_key = sn::obliv::ct_select<uint64_t>(batch[orig_idx].key, 0, received_forward);
+      final_key = sn::obliv::ct_select<uint64_t>(old_key, final_key, needs_old_payload);
+      final_key = sn::obliv::ct_select<uint64_t>(batch[orig_idx].result.key_, final_key, is_real & is_search);
+      batch[orig_idx].result.key_ = final_key;
   }
 
   if (sub_orams_[1]) {
