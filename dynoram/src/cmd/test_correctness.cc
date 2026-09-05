@@ -326,10 +326,15 @@ void TestORamComprehensiveMixedWorkload() {
   std::cout << "Verifying Final State against Shadow Map...\n";
   for (uint64_t k = 1; k < next_new_key; ++k) {
     auto res = oram->Read(k, enc_key);
-    bool found_in_oram =
-        (res.val_ != nullptr &&
-         res.val_.get()[0] != 0); // Using the fact that deleted blocks are
-                                  // usually 0-filled or null
+    bool found_in_oram = false;
+    if (res.val_ != nullptr) {
+        for (int i = 0; i < 8; ++i) {
+            if (res.val_.get()[i] != 0) {
+                found_in_oram = true;
+                break;
+            }
+        }
+    }
     uint64_t oram_val = 0;
     if (found_in_oram) {
       std::memcpy(&oram_val, res.val_.get(), 8);
