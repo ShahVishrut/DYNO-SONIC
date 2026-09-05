@@ -132,7 +132,7 @@ Block OHeap::ExtractMin(crypto::Key enc_key, bool is_dummy) {
   ReadPath(second_pos, enc_key);
   UpdateMinAndEvict(second_pos, enc_key);
 
-  size_ -= sn::obliv::ct_select<size_t>(0, 1, force_dummy);
+  size_ -= sn::obliv::ct_select<size_t>(1, 0, force_dummy);
 
   return min_block;
 }
@@ -142,9 +142,9 @@ void OHeap::Insert(Key k, Val v, crypto::Key enc_key, bool is_dummy) {
   auto p = GeneratePos();
   auto evict_paths = GeneratePathPair();
   
-  Pos final_pos = sn::obliv::ct_select<Pos>(0, p, is_dummy);
+  Pos final_pos = sn::obliv::ct_select<Pos>(p, 0, is_dummy);
   stash_.emplace_back(final_pos, k, std::move(v));
-  size_ += sn::obliv::ct_select<size_t>(0, 1, is_dummy);
+  size_ += sn::obliv::ct_select<size_t>(1, 0, is_dummy);
   
   ReadPath(evict_paths.first, enc_key);
   UpdateMinAndEvict(evict_paths.first, enc_key);
