@@ -83,13 +83,17 @@ void ORam::Grow(crypto::Key enc_key) {
   }
 
   assert(sub_orams_[0] != nullptr && sub_orams_[1] != nullptr);
+  std::cout << "[DEBUG] ORam::Grow old capacity: " << sub_orams_[0]->Capacity() << " new capacity: " << sub_orams_[1]->Capacity() << std::endl;
   Key move_idx = (capacity_ % sub_orams_[0]->Capacity()) + 1;
   auto start_accesses = SubORamsMemoryAccessCountSum();
   auto start_bytes = SubORamsMemoryBytesMovedTotalSum();
+  std::cout << "[DEBUG] ORam::Grow calling ReadAndRemove move_idx: " << move_idx << std::endl;
   auto move_bl = sub_orams_[0]->ReadAndRemove(0, move_idx, enc_key, true);
+  std::cout << "[DEBUG] ORam::Grow calling Insert" << std::endl;
   
   bool is_real = (move_bl.meta_.key_ != 0);
   sub_orams_[1]->Insert(std::move(move_bl), enc_key, is_real);
+  std::cout << "[DEBUG] ORam::Grow finished Insert" << std::endl;
   
   memory_access_count_ += SubORamsMemoryAccessCountSum() - start_accesses;
   memory_bytes_moved_total_ += SubORamsMemoryBytesMovedTotalSum() - start_bytes;
@@ -171,6 +175,7 @@ Block ORam::Read(Key k, crypto::Key enc_key) {
 
 void ORam::Insert(Key k, Val v, crypto::Key enc_key) {
   assert(1 <= k && k <= capacity_);
+  std::cout << "[DEBUG] ORam::Insert start for k: " << k << " capacity: " << capacity_ << std::endl;
   auto start_accesses = SubORamsMemoryAccessCountSum();
   auto start_bytes = SubORamsMemoryBytesMovedTotalSum();
   
@@ -199,6 +204,7 @@ void ORam::Insert(Key k, Val v, crypto::Key enc_key) {
   ++size_;
   memory_access_count_ += SubORamsMemoryAccessCountSum() - start_accesses;
   memory_bytes_moved_total_ += SubORamsMemoryBytesMovedTotalSum() - start_bytes;
+  std::cout << "[DEBUG] ORam::Insert finish" << std::endl;
 }
 
 

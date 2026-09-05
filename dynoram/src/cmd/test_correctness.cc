@@ -564,11 +564,11 @@ void TestORamDeterministicScale() {
 }
 
 int main() {
+  TestOHeap();
+  TestORam();
   TestORamDeterministicScale();
   TestORamComprehensiveMixedWorkload();
   TestOMap();
-  TestOHeap();
-  TestORam();
   TestORamBatch();
   std::cout << "\n✅ All correctness tests passed successfully!\n";
   return 0;
