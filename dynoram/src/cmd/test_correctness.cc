@@ -69,6 +69,7 @@ void TestOHeap() {
   // start with capacity 2^8 = 256 to satisfy SONIC minimum tree height
   // requirements
   auto oheap = std::make_unique<dyno::dynamic_stepping_path_oheap::OHeap>(8, 8);
+  oheap->FillWithDummies(enc_key);
 
   // Insert out of order
   int keys[] = {15, 3, 9, 12, 1, 7, 5, 2, 8, 4};
@@ -87,6 +88,7 @@ void TestOHeap() {
     oheap->FindMin(enc_key,
                    false); // Required for oblivious priority queue algorithms
     auto res = oheap->ExtractMin(enc_key);
+    std::cout << "Extracted: " << res.meta_.key_ << " (Expected: " << exp << ")\n";
     if (res.meta_.key_ != exp) {
       std::cerr << "OHeap ExtractMin mismatch! Expected " << exp << ", got "
                 << res.meta_.key_ << "\n";

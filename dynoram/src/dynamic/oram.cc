@@ -76,6 +76,12 @@ void ORam::Grow(crypto::Key enc_key) {
     assert(sub_orams_[1] != nullptr);
     sub_orams_[0] = std::move(sub_orams_[1]);
     sub_orams_[1] = std::make_unique<PORam>(2 * capacity_, val_len_, true);
+    
+    if (log_map_.size() == 2) {
+        log_map_[0] = std::move(log_map_[1]);
+        log_map_[1].clear();
+        log_map_[1].resize((2 * capacity_) + 1, 0);
+    }
   }
 
   assert(sub_orams_[0] != nullptr && sub_orams_[1] != nullptr);

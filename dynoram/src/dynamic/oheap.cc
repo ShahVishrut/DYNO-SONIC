@@ -15,8 +15,17 @@ OHeap::OHeap(int starting_size_power_of_two, size_t val_len)
       val_len_(val_len),
       size_(1UL << starting_size_power_of_two) {
   auto base_cap = capacity_ >> 1;
-  for (int i = 0; i < 2; ++i)
+  for (int i = 0; i < 2; ++i) {
     sub_oheaps_[i] = std::make_unique<POHeap>(base_cap << i, val_len_);
+  }
+}
+
+void OHeap::FillWithDummies(crypto::Key enc_key) {
+  for (int i = 0; i < 2; ++i) {
+    if (sub_oheaps_[i]) {
+      sub_oheaps_[i]->FillWithDummies(enc_key);
+    }
+  }
 }
 
 namespace {
@@ -36,6 +45,7 @@ void OHeap::Grow(crypto::Key enc_key) {
     assert(sub_oheaps_[1] != nullptr);
     sub_oheaps_[0] = std::move(sub_oheaps_[1]);
     sub_oheaps_[1] = std::make_unique<POHeap>(2 * capacity_, val_len_);
+    sub_oheaps_[1]->FillWithDummies(enc_key);
   }
 
   auto start_accesses = SubOHeapsMemoryAccessCountSum();

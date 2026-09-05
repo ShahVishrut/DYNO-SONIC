@@ -626,6 +626,7 @@ std::vector<static_path_oram::Block> SonicORamAdapter::ReadBatch(const std::vect
                       
                       // Zero out the result for dummies to prevent data corruption
                       res.meta_.key_ = sn::obliv::ct_select<uint64_t>(res.meta_.key_, 0, op.is_real);
+                      uint64_t pos = sn::obliv::ct_select<uint64_t>(op.key - 1, 0, op.is_real);
                       res.meta_.pos_ = sn::obliv::ct_select<uint64_t>(res.meta_.pos_, 0, op.is_real);
                       if (res.val_) {
                           std::vector<uint8_t> zeros(val_len_, 0);
@@ -710,7 +711,7 @@ void SonicORamAdapter::InsertBatch(std::vector<static_path_oram::Block>& blocks,
       for (size_t j = 0; j < B; ++j) {
           uint64_t k = blocks[j].meta_.key_;
           bool real = (!sn::obliv::ct_eq<uint64_t>(k, 0));
-          batch_new_leaves[j] = sn::obliv::ct_select<uint64_t>(blocks[j].meta_.pos_ - 1, impl_->GenerateLeaf(), real);
+          batch_new_leaves[j] = sn::obliv::ct_select<uint64_t>(k - 1, impl_->GenerateLeaf(), real);
           batch_cur_leaves[j] = batch_new_leaves[j];
       }
   }
