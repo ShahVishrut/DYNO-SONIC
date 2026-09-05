@@ -339,8 +339,24 @@ void TestORamComprehensiveMixedWorkload() {
 
     if (found_in_shadow) {
       if (!found_in_oram) {
-        std::cerr << "Mismatch at Key " << k
-                  << ": Exists in shadow map but NOT in ORAM!\n";
+        std::cerr << "Mismatch at Key " << k << ": Exists in shadow map but NOT in ORAM!\n";
+        std::cerr << "History of Key " << k << " in mixed_batch:\n";
+        for (size_t op_idx = 0; op_idx < mixed_batch.size(); ++op_idx) {
+            if (mixed_batch[op_idx].key == k) {
+                std::string type_str;
+                switch (mixed_batch[op_idx].type) {
+                    case dyno::dynamic_stepping_path_oram::ORam::OpType::Search: type_str = "Search"; break;
+                    case dyno::dynamic_stepping_path_oram::ORam::OpType::Update: type_str = "Update"; break;
+                    case dyno::dynamic_stepping_path_oram::ORam::OpType::Delete: type_str = "Delete"; break;
+                    case dyno::dynamic_stepping_path_oram::ORam::OpType::Insert: type_str = "Insert"; break;
+                }
+                std::cerr << "  Op " << op_idx << ": " << type_str;
+                if (mixed_batch[op_idx].val) {
+                    std::cerr << " val=" << (int)mixed_batch[op_idx].val.get()[0];
+                }
+                std::cerr << "\n";
+            }
+        }
         assert(false);
       } else if (oram_val != shadow_state[k]) {
         std::cerr << "Mismatch at Key " << k << ": ORAM=" << oram_val
