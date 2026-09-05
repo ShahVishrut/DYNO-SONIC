@@ -7,6 +7,7 @@
 #include "src/static/oheap.h"
 #include "src/utils/crypto.h"
 #include "sonic/obliv/ops/core_ops.hpp"
+#include <iostream>
 
 namespace dyno::dynamic_stepping_path_oheap {
 
