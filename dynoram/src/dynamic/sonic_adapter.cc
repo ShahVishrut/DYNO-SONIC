@@ -532,6 +532,7 @@ std::vector<static_path_oram::Block> SonicORamAdapter::ReadBatch(const std::vect
                       
                       uint64_t candidate_next = sn::obliv::ct_select<uint64_t>(0, batch_new_leaves[j], is_delete);
                       next_pos = sn::obliv::ct_select<uint64_t>(candidate_next, next_pos, match);
+                      current_pos = sn::obliv::ct_select<uint64_t>(next_pos, current_pos, match);
                   }
                   impl_->pos_map[pos] = next_pos;
               }
