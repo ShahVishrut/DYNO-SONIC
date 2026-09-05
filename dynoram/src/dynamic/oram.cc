@@ -77,11 +77,9 @@ void ORam::Grow(crypto::Key enc_key) {
     sub_orams_[0] = std::move(sub_orams_[1]);
     sub_orams_[1] = std::make_unique<PORam>(2 * capacity_, val_len_, true);
     
-    if (log_map_.size() == 2) {
-        log_map_[0] = std::move(log_map_[1]);
-        log_map_[1].clear();
-        log_map_[1].resize((2 * capacity_) + 1, 0);
-    }
+    log_map_[0] = std::move(log_map_[1]);
+    log_map_[1].clear();
+    log_map_[1].resize((2 * capacity_) + 1, 0);
   }
 
   assert(sub_orams_[0] != nullptr && sub_orams_[1] != nullptr);
@@ -410,7 +408,7 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
   std::vector<uint8_t> backward_payload(val_len_, 0);
   
   for (int64_t i = B - 1; i >= 0; --i) {
-      bool end_of_key = (i == B - 1) || !sn::obliv::ct_eq(elems[i].key, elems[i+1].key);
+      bool end_of_key = (static_cast<size_t>(i) == B - 1) || !sn::obliv::ct_eq(elems[i].key, elems[i+1].key);
       has_future_write = sn::obliv::ct_select(false, has_future_write, end_of_key);
       has_future_delete = sn::obliv::ct_select(false, has_future_delete, end_of_key);
       has_future_access = sn::obliv::ct_select(false, has_future_access, end_of_key);
@@ -829,14 +827,14 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
             bool is_valid = (old_phys_k != 0);
             
             uint64_t log_k = 0;
-            for (uint64_t j = 1; j <= old_y; ++j) {
+            for (int64_t j = 1; j <= old_y; ++j) {
                 bool match = is_valid && sn::obliv::ct_eq(j, old_phys_k);
                 log_k = sn::obliv::ct_select(log_map_[0][j], log_k, match);
                 log_map_[0][j] = sn::obliv::ct_select<uint64_t>(0, log_map_[0][j], match);
             }
             
             uint64_t new_phys_k = 0;
-            for (uint64_t j = 1; j <= 2 * old_y; ++j) {
+            for (int64_t j = 1; j <= 2 * old_y; ++j) {
                 bool is_empty = (log_map_[1][j] == 0);
                 bool select_this = is_valid && is_empty && (new_phys_k == 0);
                 new_phys_k = sn::obliv::ct_select(j, new_phys_k, select_this);
@@ -876,14 +874,14 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
             bool is_valid = (old_phys_k != 0);
             
             uint64_t log_k = 0;
-            for (uint64_t j = 1; j <= old_x; ++j) {
+            for (int64_t j = 1; j <= old_x; ++j) {
                 bool match = is_valid && sn::obliv::ct_eq(j, old_phys_k);
                 log_k = sn::obliv::ct_select(log_map_[1][j], log_k, match);
                 log_map_[1][j] = sn::obliv::ct_select<uint64_t>(0, log_map_[1][j], match);
             }
             
             uint64_t new_phys_k = 0;
-            for (uint64_t j = 1; j <= old_x / 2; ++j) {
+            for (int64_t j = 1; j <= old_x / 2; ++j) {
                 bool is_empty = (log_map_[0][j] == 0);
                 bool select_this = is_valid && is_empty && (new_phys_k == 0);
                 new_phys_k = sn::obliv::ct_select(j, new_phys_k, select_this);
