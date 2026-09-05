@@ -827,14 +827,14 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
             bool is_valid = (old_phys_k != 0);
             
             uint64_t log_k = 0;
-            for (int64_t j = 1; j <= old_y; ++j) {
+            for (uint64_t j = 1; j <= static_cast<uint64_t>(old_y); ++j) {
                 bool match = is_valid && sn::obliv::ct_eq(j, old_phys_k);
                 log_k = sn::obliv::ct_select(log_map_[0][j], log_k, match);
                 log_map_[0][j] = sn::obliv::ct_select<uint64_t>(0, log_map_[0][j], match);
             }
             
             uint64_t new_phys_k = 0;
-            for (int64_t j = 1; j <= 2 * old_y; ++j) {
+            for (uint64_t j = 1; j <= static_cast<uint64_t>(2 * old_y); ++j) {
                 bool is_empty = (log_map_[1][j] == 0);
                 bool select_this = is_valid && is_empty && (new_phys_k == 0);
                 new_phys_k = sn::obliv::ct_select(j, new_phys_k, select_this);
@@ -874,14 +874,14 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
             bool is_valid = (old_phys_k != 0);
             
             uint64_t log_k = 0;
-            for (int64_t j = 1; j <= old_x; ++j) {
+            for (uint64_t j = 1; j <= static_cast<uint64_t>(old_x); ++j) {
                 bool match = is_valid && sn::obliv::ct_eq(j, old_phys_k);
                 log_k = sn::obliv::ct_select(log_map_[1][j], log_k, match);
                 log_map_[1][j] = sn::obliv::ct_select<uint64_t>(0, log_map_[1][j], match);
             }
             
             uint64_t new_phys_k = 0;
-            for (int64_t j = 1; j <= old_x / 2; ++j) {
+            for (uint64_t j = 1; j <= static_cast<uint64_t>(old_x / 2); ++j) {
                 bool is_empty = (log_map_[0][j] == 0);
                 bool select_this = is_valid && is_empty && (new_phys_k == 0);
                 new_phys_k = sn::obliv::ct_select(j, new_phys_k, select_this);
