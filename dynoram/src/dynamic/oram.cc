@@ -193,14 +193,21 @@ void ORam::Insert(Key k, Val v, crypto::Key enc_key) {
   std::cout << "[DEBUG] ORam::Insert entering loop" << std::endl;
   for (int i = 0; i < 2; ++i) {
     if (sub_orams_[i] == nullptr) continue;
-    std::cout << "[DEBUG] ORam::Insert loop i=" << i << std::endl;
+    std::cout << "[DEBUG] ORam::Insert loop i=" << i << " step 1" << std::endl;
     bool is_real = (i == 1);
+    std::cout << "[DEBUG] ORam::Insert loop i=" << i << " step 2" << std::endl;
     uint64_t target_phys_k = sn::obliv::ct_select<uint64_t>(phys_k, 1, is_real);
     
+    std::cout << "[DEBUG] ORam::Insert loop i=" << i << " step 3 target=" << target_phys_k << std::endl;
     static_path_oram::Block b(0, target_phys_k);
+    
+    std::cout << "[DEBUG] ORam::Insert loop i=" << i << " step 4" << std::endl;
     if (v) {
+        std::cout << "[DEBUG] ORam::Insert loop i=" << i << " step 5" << std::endl;
         b.val_ = std::make_unique<uint8_t[]>(val_len_);
+        std::cout << "[DEBUG] ORam::Insert loop i=" << i << " step 6" << std::endl;
         std::copy_n(v.get(), val_len_, b.val_.get());
+        std::cout << "[DEBUG] ORam::Insert loop i=" << i << " step 7" << std::endl;
     }
     std::cout << "[DEBUG] ORam::Insert loop calling Insert on sub_orams_[" << i << "]" << std::endl;
     sub_orams_[i]->Insert(std::move(b), enc_key, is_real);
