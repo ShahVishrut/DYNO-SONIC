@@ -387,9 +387,11 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
           }
           sn::obliv::ct_select_array(batch[i].result.val_.get(), current_payload.data(), batch[i].result.val_.get(), val_len_, forward_to_search);
       }
-      // If a search receives a forwarded payload, or if it searches a deleted key, it becomes dummy
+      // If a search receives a forwarded payload, or if it searches a deleted key, it becomes dummy.
+      // If an update targets a deleted key, it is a no-op and also becomes dummy.
       bool search_becomes_dummy = (is_search & has_payload) | (is_search & is_deleted);
-      sn::obliv::ct_set_ref(elems[i].is_dummy, true, search_becomes_dummy);
+      bool update_becomes_dummy = is_update & is_deleted;
+      sn::obliv::ct_set_ref(elems[i].is_dummy, true, search_becomes_dummy | update_becomes_dummy);
   }
 
   // Pass 2: Backward Scan
