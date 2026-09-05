@@ -175,12 +175,12 @@ Block ORam::Read(Key k, crypto::Key enc_key) {
 
 void ORam::Insert(Key k, Val v, crypto::Key enc_key) {
   assert(1 <= k && k <= capacity_);
-  std::cout << "[DEBUG] ORam::Insert start for k: " << k << " capacity: " << capacity_ << std::endl;
   auto start_accesses = SubORamsMemoryAccessCountSum();
   auto start_bytes = SubORamsMemoryBytesMovedTotalSum();
   
   uint64_t cap_L = sub_orams_[1] ? sub_orams_[1]->Capacity() : 0;
   
+  std::cout << "[DEBUG] ORam::Insert starting log_map_[1] loop" << std::endl;
   uint64_t phys_k = 0;
   for (uint64_t i = 1; i <= cap_L; ++i) {
       bool is_empty = (log_map_[1][i] == 0);
@@ -188,26 +188,25 @@ void ORam::Insert(Key k, Val v, crypto::Key enc_key) {
       phys_k = sn::obliv::ct_select<uint64_t>(i, phys_k, select_this);
       log_map_[1][i] = sn::obliv::ct_select<uint64_t>(k, log_map_[1][i], select_this);
   }
+  std::cout << "[DEBUG] ORam::Insert log_map_[1] loop done, phys_k=" << phys_k << std::endl;
   
-  for (int i = 0; i < 2; ++i) {
-    if (sub_orams_[i] == nullptr) continue;
-    bool is_real = (i == 1);
-    uint64_t target_phys_k = sn::obliv::ct_select<uint64_t>(phys_k, 1, is_real);
-    
-    static_path_oram::Block b(0, target_phys_k);
-    if (v) {
-        b.val_ = std::make_unique<uint8_t[]>(val_len_);
-        std::copy(v.get(), v.get() + val_len_, b.val_.get());
-    }
-    sub_orams_[i]->Insert(std::move(b), enc_key, is_real);
+  Block res;
+  res.meta_.key_ = phys_k;
+  res.meta_.pos_ = 1;
+  std::cout << "[DEBUG] ORam::Insert copying val" << std::endl;
+  if (v) {
+      res.val_ = std::make_unique<uint8_t[]>(val_len_);
+      std::copy_n(v.get(), val_len_, res.val_.get());
   }
+  
+  std::cout << "[DEBUG] ORam::Insert calling sub_orams_[1]->Insert" << std::endl;
+  sub_orams_[1]->Insert(std::move(res), enc_key, true);
+  std::cout << "[DEBUG] ORam::Insert sub_orams_[1]->Insert done" << std::endl;
+  
   ++size_;
   memory_access_count_ += SubORamsMemoryAccessCountSum() - start_accesses;
   memory_bytes_moved_total_ += SubORamsMemoryBytesMovedTotalSum() - start_bytes;
-  std::cout << "[DEBUG] ORam::Insert finish" << std::endl;
 }
-
-
 
 uint64_t ORam::SubORamsMemoryAccessCountSum() {
   uint64_t res = 0;
@@ -585,9 +584,7 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
   }
 
   if (sub_orams_[0]) {
-      std::cout << "[DEBUG] Phase 2: small sub_oram ReadBatch" << std::endl;
       auto read_results = sub_orams_[0]->ReadBatch(small_ops, enc_key, steady_state);
-      std::cout << "[DEBUG] Phase 2: small sub_oram ReadBatch done" << std::endl;
       for (size_t i = 0; i < original_accesses; ++i) {
           if (small_ops[i].is_real) {
               uint32_t orig_idx = elems[i].seq;
@@ -600,9 +597,7 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
       }
   }
   if (sub_orams_[1]) {
-      std::cout << "[DEBUG] Phase 2: large sub_oram ReadBatch" << std::endl;
       auto read_results = sub_orams_[1]->ReadBatch(large_ops, enc_key, steady_state);
-      std::cout << "[DEBUG] Phase 2: large sub_oram ReadBatch done" << std::endl;
       for (size_t i = 0; i < original_accesses; ++i) {
           if (large_ops[i].is_real) {
               uint32_t orig_idx = elems[i].seq;
@@ -670,24 +665,9 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
   }
 
   if (sub_orams_[1]) {
-    std::cout << "[DEBUG] Pre-Phase 3: sn_inserts populating" << std::endl;
     std::vector<static_path_oram::Block> sn_inserts;
-    std::cout << "[DEBUG] Reserving sn_inserts..." << std::endl;
     sn_inserts.reserve(inserts.size());
-    std::cout << "[DEBUG] Reserved sn_inserts!" << std::endl;
-    int idx = 0;
     for (auto& b : inserts) {
-        if (idx % 100 == 0 || idx > 510) {
-            std::cout << "  [DEBUG] Loop iter " << idx << " start, key=" << b.key_ << std::endl;
-        }
-        
-        // Find the phys_k for this insert using the pre-assigned batch values
-        // We must scan the batch array to find the op with this key to get its phys_k
-        // Actually, since inserts correspond to the elements at the END of elems array!
-        // The loop is over `inserts`, which was populated from `elems` at indices original_accesses to B.
-        // Let's just use the orig_idx!
-        // Wait, b.key_ is the logic_key, not orig_idx.
-        // Let's modify the `inserts` population logic to store phys_k directly!
         uint64_t phys_k = 0;
         for (size_t j = original_accesses; j < B; ++j) {
             uint32_t orig_idx = elems[j].seq;
@@ -700,12 +680,8 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
             new_b.val_ = std::move(b.val_);
         }
         sn_inserts.push_back(std::move(new_b));
-        idx++;
     }
-    std::cout << "[DEBUG] Pre-Phase 3: sn_inserts populated" << std::endl;
-    std::cout << "[DEBUG] Phase 3: large sub_oram InsertBatch" << std::endl;
     sub_orams_[1]->InsertBatch(sn_inserts, enc_key, steady_state);
-    std::cout << "[DEBUG] Phase 3: large sub_oram InsertBatch done" << std::endl;
   }
 
   // Phase 4: Oblivious Net Growth & Boundary Checking
@@ -737,7 +713,6 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
 
   // Phase 4: Exact Transfer via LogMap
   if (sub_orams_[0] && sub_orams_[1] && T > 0) {
-    std::cout << "[DEBUG] Phase 4 Start. T=" << T << " k_transfer=" << k_transfer << std::endl;
     int64_t T_pow2 = 1;
     while (T_pow2 < T) T_pow2 *= 2;
 
