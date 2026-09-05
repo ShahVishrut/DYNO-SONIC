@@ -190,8 +190,10 @@ void ORam::Insert(Key k, Val v, crypto::Key enc_key) {
   }
   std::cout << "[DEBUG] ORam::Insert log_map_[1] loop done, phys_k=" << phys_k << std::endl;
   
+  std::cout << "[DEBUG] ORam::Insert entering loop" << std::endl;
   for (int i = 0; i < 2; ++i) {
     if (sub_orams_[i] == nullptr) continue;
+    std::cout << "[DEBUG] ORam::Insert loop i=" << i << std::endl;
     bool is_real = (i == 1);
     uint64_t target_phys_k = sn::obliv::ct_select<uint64_t>(phys_k, 1, is_real);
     
@@ -200,7 +202,9 @@ void ORam::Insert(Key k, Val v, crypto::Key enc_key) {
         b.val_ = std::make_unique<uint8_t[]>(val_len_);
         std::copy_n(v.get(), val_len_, b.val_.get());
     }
+    std::cout << "[DEBUG] ORam::Insert loop calling Insert on sub_orams_[" << i << "]" << std::endl;
     sub_orams_[i]->Insert(std::move(b), enc_key, is_real);
+    std::cout << "[DEBUG] ORam::Insert loop finished Insert on sub_orams_[" << i << "]" << std::endl;
   }
   
   ++size_;
