@@ -180,7 +180,6 @@ void ORam::Insert(Key k, Val v, crypto::Key enc_key) {
   
   uint64_t cap_L = sub_orams_[1] ? sub_orams_[1]->Capacity() : 0;
   
-  std::cout << "[DEBUG] ORam::Insert starting log_map_[1] loop" << std::endl;
   uint64_t phys_k = 0;
   for (uint64_t i = 1; i <= cap_L; ++i) {
       bool is_empty = (log_map_[1][i] == 0);
@@ -188,30 +187,18 @@ void ORam::Insert(Key k, Val v, crypto::Key enc_key) {
       phys_k = sn::obliv::ct_select<uint64_t>(i, phys_k, select_this);
       log_map_[1][i] = sn::obliv::ct_select<uint64_t>(k, log_map_[1][i], select_this);
   }
-  std::cout << "[DEBUG] ORam::Insert log_map_[1] loop done, phys_k=" << phys_k << std::endl;
   
-  std::cout << "[DEBUG] ORam::Insert entering loop" << std::endl;
   for (int i = 0; i < 2; ++i) {
     if (sub_orams_[i] == nullptr) continue;
-    std::cout << "[DEBUG] ORam::Insert loop i=" << i << " step 1" << std::endl;
     bool is_real = (i == 1);
-    std::cout << "[DEBUG] ORam::Insert loop i=" << i << " step 2" << std::endl;
     uint64_t target_phys_k = sn::obliv::ct_select<uint64_t>(phys_k, 1, is_real);
     
-    std::cout << "[DEBUG] ORam::Insert loop i=" << i << " step 3 target=" << target_phys_k << std::endl;
-    static_path_oram::Block b(0, target_phys_k);
-    
-    std::cout << "[DEBUG] ORam::Insert loop i=" << i << " step 4" << std::endl;
+    static_path_oram::Block b(static_cast<uint32_t>(0), static_cast<uint32_t>(target_phys_k));
     if (v) {
-        std::cout << "[DEBUG] ORam::Insert loop i=" << i << " step 5" << std::endl;
         b.val_ = std::make_unique<uint8_t[]>(val_len_);
-        std::cout << "[DEBUG] ORam::Insert loop i=" << i << " step 6" << std::endl;
         std::copy_n(v.get(), val_len_, b.val_.get());
-        std::cout << "[DEBUG] ORam::Insert loop i=" << i << " step 7" << std::endl;
     }
-    std::cout << "[DEBUG] ORam::Insert loop calling Insert on sub_orams_[" << i << "]" << std::endl;
     sub_orams_[i]->Insert(std::move(b), enc_key, is_real);
-    std::cout << "[DEBUG] ORam::Insert loop finished Insert on sub_orams_[" << i << "]" << std::endl;
   }
   
   ++size_;
