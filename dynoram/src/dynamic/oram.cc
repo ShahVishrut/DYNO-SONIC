@@ -416,8 +416,10 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
           sn::obliv::ct_select_array(backward_payload.data(), batch[i].val.get(), backward_payload.data(), val_len_, captures_payload);
       }
       
-      // If there is a future write or delete, this operation is overshadowed and becomes dummy
-      bool overshadowed = (is_insert | is_update | is_delete) & (has_future_write | has_future_delete);
+      // If there is a future write or delete, this operation might be overshadowed and become dummy
+      bool overshadowed = (is_insert | is_update) & (has_future_write | has_future_delete);
+      // Deletes are ONLY overshadowed by future deletes, NEVER by future writes (which allocate new slots)
+      overshadowed = overshadowed | (is_delete & has_future_delete);
       
       // Exception: If this is an Insert, and there are future Updates, the Insert MUST remain real 
       // (to be processed by InsertBatch and increment real_I). 

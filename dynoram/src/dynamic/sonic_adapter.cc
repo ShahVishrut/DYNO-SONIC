@@ -581,7 +581,7 @@ std::vector<static_path_oram::Block> SonicORamAdapter::ReadBatch(const std::vect
                       req.address = sn::obliv::ct_select<uint64_t>(op.key - 1, UINT64_MAX, op.is_real);
                       req.cur_leaf = batch_cur_leaves[j];
                       req.new_leaf = batch_new_leaves[j];
-                      bool is_update = sn::obliv::ct_eq<uint8_t>(op.op_type, 3);
+                      bool is_update = sn::obliv::ct_eq<uint8_t>(op.op_type, 1);
                       bool is_delete = sn::obliv::ct_eq<uint8_t>(op.op_type, 2);
                       req.is_write = is_update | is_delete;
                       
@@ -601,20 +601,6 @@ std::vector<static_path_oram::Block> SonicORamAdapter::ReadBatch(const std::vect
                       
                       req.in = sn::util::span<uint8_t>(in_buf);
                       req.out = sn::util::span<uint8_t>(out_buf);
-
-                      if (op.is_real && op.key <= 20) {
-                          std::cout << "[DEBUG] ReadBatch access j=" << j << " key=" << op.key
-                                    << " op_type=" << (int)op.op_type << " is_real=" << op.is_real
-                                    << " is_write=" << req.is_write << " is_update=" << is_update
-                                    << " is_delete=" << is_delete
-                                    << " addr=" << req.address << " cur_leaf=" << req.cur_leaf
-                                    << std::endl;
-                          if (req.is_write) {
-                              std::cout << "[DEBUG]   in_buf[0..23]=";
-                              for (int db=0; db<24 && db<(int)kSonicBlockBytes; ++db) std::cout << " " << (int)in_buf[db];
-                              std::cout << std::endl;
-                          }
-                      }
 
                       auto pre_ops = impl_->client->state_ref().metrics_snapshot().access_ops;
                       {
