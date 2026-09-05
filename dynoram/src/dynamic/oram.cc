@@ -190,18 +190,18 @@ void ORam::Insert(Key k, Val v, crypto::Key enc_key) {
   }
   std::cout << "[DEBUG] ORam::Insert log_map_[1] loop done, phys_k=" << phys_k << std::endl;
   
-  Block res;
-  res.meta_.key_ = phys_k;
-  res.meta_.pos_ = 1;
-  std::cout << "[DEBUG] ORam::Insert copying val" << std::endl;
-  if (v) {
-      res.val_ = std::make_unique<uint8_t[]>(val_len_);
-      std::copy_n(v.get(), val_len_, res.val_.get());
+  for (int i = 0; i < 2; ++i) {
+    if (sub_orams_[i] == nullptr) continue;
+    bool is_real = (i == 1);
+    uint64_t target_phys_k = sn::obliv::ct_select<uint64_t>(phys_k, 1, is_real);
+    
+    static_path_oram::Block b(0, target_phys_k);
+    if (v) {
+        b.val_ = std::make_unique<uint8_t[]>(val_len_);
+        std::copy_n(v.get(), val_len_, b.val_.get());
+    }
+    sub_orams_[i]->Insert(std::move(b), enc_key, is_real);
   }
-  
-  std::cout << "[DEBUG] ORam::Insert calling sub_orams_[1]->Insert" << std::endl;
-  sub_orams_[1]->Insert(std::move(res), enc_key, true);
-  std::cout << "[DEBUG] ORam::Insert sub_orams_[1]->Insert done" << std::endl;
   
   ++size_;
   memory_access_count_ += SubORamsMemoryAccessCountSum() - start_accesses;
