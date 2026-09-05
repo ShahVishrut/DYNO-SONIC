@@ -186,7 +186,6 @@ Block OHeap::ExtractMin(crypto::Key enc_key) {
     if (i == 0 && (sub_oheaps_[i] == nullptr || IsPowerOfTwo(capacity_)))
       continue;
     auto so_bl = sub_oheaps_[i]->FindMin(enc_key, false);
-    std::cout << "[DEBUG] sub_oheap " << i << " FindMin returned key: " << so_bl.meta_.key_ << " pos: " << so_bl.meta_.pos_ << std::endl;
     
     bool is_valid = (so_bl.meta_.pos_ != 0);
     bool is_dummy = (res.meta_.pos_ == 0);
