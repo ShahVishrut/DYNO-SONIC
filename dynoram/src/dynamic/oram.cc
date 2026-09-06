@@ -516,7 +516,7 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
     // To make sort stable / deterministic if op_type is same, sort by seq
     bool seq_lt = sn::obliv::ct_lt(a.seq, b.seq);
     
-    return sn::obliv::ct_select(seq_lt, a_lt_b, a_eq_b);
+    return sn::obliv::ct_select(a_eq_b, seq_lt, a_lt_b);
   };
   sn::sortshuffle::ser::bitonic::detail::bitonic_sort_impl(elems.data(), B, key_ext, comp3, hook);
 
