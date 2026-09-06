@@ -284,98 +284,92 @@ void TestORamComprehensiveMixedWorkload() {
 
   uint64_t next_new_key = 1025;
 
-  // Run massive mixed workload
-  std::vector<dyno::dynamic_stepping_path_oram::ORam::BatchOperation>
-      mixed_batch;
-  for (int i = 0; i < 2048; ++i) {
-    dyno::dynamic_stepping_path_oram::ORam::BatchOperation op;
-    int op_rand = dist_op(rng);
-
-    if (op_rand < 15) {
-      // Real Insert (Scale up)
-      op.key = next_new_key++;
-      op.type = dyno::dynamic_stepping_path_oram::ORam::OpType::Insert;
-      op.val = std::make_unique<uint8_t[]>(8);
-      uint64_t v = dist_val(rng);
-      std::memcpy(op.val.get(), &v, 8);
-      shadow_state[op.key] = v;
-    } else if (op_rand < 40) {
-      // Update (only affects existing keys in the ORAM)
-      op.key = dist_key(rng);
-      op.type = dyno::dynamic_stepping_path_oram::ORam::OpType::Update;
-      op.val = std::make_unique<uint8_t[]>(8);
-      uint64_t v = dist_val(rng);
-      std::memcpy(op.val.get(), &v, 8);
-      if (shadow_state.count(op.key) > 0) {
+  std::vector<int> batch_sizes = {2048, 512, 1024, 128, 4096};
+  
+  for (size_t b = 0; b < batch_sizes.size(); ++b) {
+    int current_batch_size = batch_sizes[b];
+    std::cout << "  Running mixed batch " << b + 1 << "/" << batch_sizes.size() << " of size " << current_batch_size << "...\n";
+    
+    // Change seed per batch slightly for variety, but keep deterministic
+    rng.seed(1337 + b); 
+    
+    std::vector<dyno::dynamic_stepping_path_oram::ORam::BatchOperation> mixed_batch;
+    for (int i = 0; i < current_batch_size; ++i) {
+      dyno::dynamic_stepping_path_oram::ORam::BatchOperation op;
+      int op_rand = dist_op(rng);
+  
+      if (op_rand < 15) {
+        // Real Insert (Scale up)
+        op.key = next_new_key++;
+        op.type = dyno::dynamic_stepping_path_oram::ORam::OpType::Insert;
+        op.val = std::make_unique<uint8_t[]>(8);
+        uint64_t v = dist_val(rng);
+        std::memcpy(op.val.get(), &v, 8);
         shadow_state[op.key] = v;
-      }
-    } else if (op_rand < 80) {
-      // Read
-      op.key = dist_key(rng);
-      op.type = dyno::dynamic_stepping_path_oram::ORam::OpType::Search;
-    } else {
-      // Delete (in Block ORAM, we delete a key by overwriting it with zeroes)
-      op.key = dist_key(rng);
-      op.type = dyno::dynamic_stepping_path_oram::ORam::OpType::Delete;
-      shadow_state.erase(op.key);
-    }
-    mixed_batch.push_back(std::move(op));
-  }
-
-  oram->ExecuteBatch(mixed_batch, enc_key);
-
-  // Verify Final State
-  std::cout << "Verifying Final State against Shadow Map...\n";
-  for (uint64_t k = 1; k < next_new_key; ++k) {
-    auto res = oram->Read(k, enc_key);
-    bool found_in_oram = false;
-    if (res.val_ != nullptr) {
-        for (int i = 0; i < 8; ++i) {
-            if (res.val_.get()[i] != 0) {
-                found_in_oram = true;
-                break;
-            }
+      } else if (op_rand < 40) {
+        // Update (only affects existing keys in the ORAM)
+        std::uniform_int_distribution<uint64_t> dist_key_dynamic(1, next_new_key - 1);
+        op.key = dist_key_dynamic(rng);
+        op.type = dyno::dynamic_stepping_path_oram::ORam::OpType::Update;
+        op.val = std::make_unique<uint8_t[]>(8);
+        uint64_t v = dist_val(rng);
+        std::memcpy(op.val.get(), &v, 8);
+        if (shadow_state.count(op.key) > 0) {
+          shadow_state[op.key] = v;
         }
-    }
-    uint64_t oram_val = 0;
-    if (found_in_oram) {
-      std::memcpy(&oram_val, res.val_.get(), 8);
-    }
-
-    bool found_in_shadow = shadow_state.count(k) > 0;
-
-    if (found_in_shadow) {
-      if (!found_in_oram) {
-        std::cerr << "Mismatch at Key " << k << ": Exists in shadow map but NOT in ORAM!\n";
-        std::cerr << "History of Key " << k << " in mixed_batch:\n";
-        for (size_t op_idx = 0; op_idx < mixed_batch.size(); ++op_idx) {
-            if (mixed_batch[op_idx].key == k) {
-                std::string type_str;
-                switch (mixed_batch[op_idx].type) {
-                    case dyno::dynamic_stepping_path_oram::ORam::OpType::Search: type_str = "Search"; break;
-                    case dyno::dynamic_stepping_path_oram::ORam::OpType::Update: type_str = "Update"; break;
-                    case dyno::dynamic_stepping_path_oram::ORam::OpType::Delete: type_str = "Delete"; break;
-                    case dyno::dynamic_stepping_path_oram::ORam::OpType::Insert: type_str = "Insert"; break;
-                }
-                std::cerr << "  Op " << op_idx << ": " << type_str;
-                if (mixed_batch[op_idx].val) {
-                    std::cerr << " val=" << (int)mixed_batch[op_idx].val.get()[0];
-                }
-                std::cerr << "\n";
-            }
-        }
-        assert(false);
-      } else if (oram_val != shadow_state[k]) {
-        std::cerr << "Mismatch at Key " << k << ": ORAM=" << oram_val
-                  << ", Shadow=" << shadow_state[k] << "\n";
-        assert(false);
+      } else if (op_rand < 80) {
+        // Read
+        std::uniform_int_distribution<uint64_t> dist_key_dynamic(1, next_new_key - 1);
+        op.key = dist_key_dynamic(rng);
+        op.type = dyno::dynamic_stepping_path_oram::ORam::OpType::Search;
+      } else {
+        // Delete
+        std::uniform_int_distribution<uint64_t> dist_key_dynamic(1, next_new_key - 1);
+        op.key = dist_key_dynamic(rng);
+        op.type = dyno::dynamic_stepping_path_oram::ORam::OpType::Delete;
+        shadow_state.erase(op.key);
       }
-    } else {
-      // Because ORAM returns zeroed bytes if deleted/not found
-      if (found_in_oram && oram_val != 0) {
-        std::cerr << "Mismatch at Key " << k << ": Exists in ORAM (" << oram_val
-                  << ") but NOT in shadow map!\n";
-        assert(false);
+      mixed_batch.push_back(std::move(op));
+    }
+  
+    oram->ExecuteBatch(mixed_batch, enc_key);
+  
+    // Verify State after this batch
+    std::cout << "  Verifying State after batch " << b + 1 << "...\n";
+    for (uint64_t k = 1; k < next_new_key; ++k) {
+      auto res = oram->Read(k, enc_key);
+      bool found_in_oram = false;
+      if (res.val_ != nullptr) {
+          for (int i = 0; i < 8; ++i) {
+              if (res.val_.get()[i] != 0) {
+                  found_in_oram = true;
+                  break;
+              }
+          }
+      }
+      uint64_t oram_val = 0;
+      if (found_in_oram) {
+        std::memcpy(&oram_val, res.val_.get(), 8);
+      }
+  
+      bool found_in_shadow = shadow_state.count(k) > 0;
+  
+      if (found_in_shadow) {
+        if (!found_in_oram) {
+          std::cerr << "Mismatch at Key " << k << ": Exists in shadow map but NOT in ORAM!\n";
+          assert(false);
+        } else if (oram_val != shadow_state[k]) {
+          std::cerr << "Mismatch at Key " << k << ": ORAM=" << oram_val
+                    << ", Shadow=" << shadow_state[k] << "\n";
+          assert(false);
+        }
+      } else {
+        // Because ORAM returns zeroed bytes if deleted/not found
+        if (found_in_oram && oram_val != 0) {
+          std::cerr << "Mismatch at Key " << k << ": Exists in ORAM (" << oram_val
+                    << ") but NOT in shadow map!\n";
+          assert(false);
+        }
       }
     }
   }
