@@ -517,7 +517,8 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
       return sn::obliv::ct_select(seq_lt, ins_lt, ins_eq);
   };
   
-  sn::sortshuffle::ser::bitonic::detail::bitonic_sort_impl(elems.data(), B, key_ext, comp3, NoOpHook{});
+  NoOpHook no_op_hook;
+  sn::sortshuffle::ser::bitonic::detail::bitonic_sort_impl(elems.data(), B, key_ext, comp3, no_op_hook);
 
   std::vector<Block> inserts;
   std::vector<SonicORamAdapter::AccessOp> small_ops, large_ops;
