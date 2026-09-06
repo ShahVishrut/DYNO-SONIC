@@ -504,6 +504,10 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
   }
 
   // Phase 3: O-Sort (Group by OpType)
+  struct NoOpHook {
+      void operator()(OblivElem* a, OblivElem* b, bool cond) const {}
+  };
+  
   auto comp3 = [](const OblivElem& a, const OblivElem& b) {
       bool a_is_ins = sn::obliv::ct_eq(a.op_type, static_cast<uint8_t>(OpType::Insert));
       bool b_is_ins = sn::obliv::ct_eq(b.op_type, static_cast<uint8_t>(OpType::Insert));
@@ -512,11 +516,8 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
       bool seq_lt = sn::obliv::ct_lt(a.seq, b.seq);
       return sn::obliv::ct_select(seq_lt, ins_lt, ins_eq);
   };
-  sn::sortshuffle::ser::bitonic::detail::bitonic_sort_impl(elems.data(), B, key_ext, comp3, hook);
-
-  for (size_t i = 0; i < B; ++i) {
-      elems[i].seq = static_cast<uint32_t>(i);
-  }
+  
+  sn::sortshuffle::ser::bitonic::detail::bitonic_sort_impl(elems.data(), B, key_ext, comp3, NoOpHook{});
 
   std::vector<Block> inserts;
   std::vector<SonicORamAdapter::AccessOp> small_ops, large_ops;
