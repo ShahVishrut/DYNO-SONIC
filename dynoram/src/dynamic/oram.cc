@@ -503,33 +503,26 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
       batch[orig_idx].phys_k = sn::obliv::ct_select<uint64_t>(assigned_slot, batch[orig_idx].phys_k, needs_slot);
   }
 
-  // Phase 3: O-Sort (Group by OpType, then Dummy)
-    std::sort(elems.begin(), elems.end(), [](const OblivElem& a, const OblivElem& b) {
-        bool a_is_insert = (a.op_type == static_cast<uint8_t>(OpType::Insert) && !a.is_dummy);
-        bool b_is_insert = (b.op_type == static_cast<uint8_t>(OpType::Insert) && !b.is_dummy);
-        
-        if (a_is_insert != b_is_insert) return a_is_insert < b_is_insert; // Real Inserts to the very end
-        
-        if (a.is_dummy != b.is_dummy) return a.is_dummy < b.is_dummy; // Real Accesses before Dummies
-        
-        if (a.key != b.key) return a.key < b.key;
-        return a.op_type < b.op_type;
-    });
+  // Phase 3: O-Sort (Group by OpType)
+  auto comp3 = [](const OblivElem& a, const OblivElem& b) {
+      bool a_is_ins = sn::obliv::ct_eq(a.op_type, static_cast<uint8_t>(OpType::Insert));
+      bool b_is_ins = sn::obliv::ct_eq(b.op_type, static_cast<uint8_t>(OpType::Insert));
+      bool ins_eq = sn::obliv::ct_eq(a_is_ins, b_is_ins);
+      bool ins_lt = !a_is_ins & b_is_ins;
+      bool seq_lt = sn::obliv::ct_lt(a.seq, b.seq);
+      return sn::obliv::ct_select(seq_lt, ins_lt, ins_eq);
+  };
+  sn::sortshuffle::ser::bitonic::detail::bitonic_sort_impl(elems.data(), B, key_ext, comp3, hook);
+
+  for (size_t i = 0; i < B; ++i) {
+      elems[i].seq = static_cast<uint32_t>(i);
+  }
 
   std::vector<Block> inserts;
   std::vector<SonicORamAdapter::AccessOp> small_ops, large_ops;
 
-  // Find the actual partition point: real inserts are at the end after the sort
-  size_t original_accesses = B;
-  for (size_t i = B; i > 0; --i) {
-      bool is_real_insert = !elems[i-1].is_dummy && 
-          sn::obliv::ct_eq(elems[i-1].op_type, static_cast<uint8_t>(OpType::Insert));
-      if (is_real_insert) {
-          original_accesses = i - 1;
-      } else {
-          break;
-      }
-  }
+  // Static partition point based on public initial distribution
+  size_t original_accesses = B - original_inserts;
 
   for (size_t i = original_accesses; i < B; ++i) {
     Block b;
