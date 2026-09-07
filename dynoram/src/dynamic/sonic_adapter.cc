@@ -434,6 +434,14 @@ std::vector<static_path_oram::Block> SonicORamAdapter::ReadAndRemoveBatch(const 
                           res.meta_.pos_ = batch_new_leaves[j] + 1;
                       }
                       
+                      // Zero out the result for dummies to prevent data corruption during Phase 5 scale up
+                      res.meta_.key_ = sn::obliv::ct_select<uint64_t>(res.meta_.key_, 0, is_real);
+                      res.meta_.pos_ = sn::obliv::ct_select<uint64_t>(res.meta_.pos_, 0, is_real);
+                      if (res.val_) {
+                          std::vector<uint8_t> zeros(val_len_, 0);
+                          sn::obliv::ct_select_array(res.val_.get(), res.val_.get(), zeros.data(), val_len_, is_real);
+                      }
+                      
                       results[j] = std::move(res);
                   }
                   {
