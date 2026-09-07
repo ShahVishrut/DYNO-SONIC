@@ -523,7 +523,7 @@ std::vector<static_path_oram::Block> SonicORamAdapter::ReadBatch(const std::vect
                       bool is_delete = sn::obliv::ct_eq<uint8_t>(op.op_type, 2);
                       thread_local_leaves[i][j] = sn::obliv::ct_select<uint64_t>(current_pos, thread_local_leaves[i][j], match);
                       
-                      uint64_t candidate_next = sn::obliv::ct_select<uint64_t>(0, batch_new_leaves[j], is_delete);
+                      uint64_t candidate_next = sn::obliv::ct_select<uint64_t>(UINT64_MAX, batch_new_leaves[j], is_delete);
                       next_pos = sn::obliv::ct_select<uint64_t>(candidate_next, next_pos, match);
                       current_pos = sn::obliv::ct_select<uint64_t>(next_pos, current_pos, match);
                   }

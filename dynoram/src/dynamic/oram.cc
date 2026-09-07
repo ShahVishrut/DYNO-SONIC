@@ -145,7 +145,7 @@ Block ORam::Read(Key k, crypto::Key enc_key) {
   uint64_t cap_L = sub_orams_[1] ? sub_orams_[1]->Capacity() : 0;
   
   for (int i = 0; i < 2; ++i) {
-    if (i == 0 && (sub_orams_[i] == nullptr || IsPowerOfTwo(capacity_)))
+    if (i == 0 && (sub_orams_[i] == nullptr))
       continue;
       
     uint64_t cap = (i == 0) ? cap_S : cap_L;
