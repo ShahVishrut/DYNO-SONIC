@@ -657,8 +657,44 @@ std::vector<static_path_oram::Block> SonicORamAdapter::ReadBatch(const std::vect
   return results;
 }
 
-void SonicORamAdapter::InsertBatch(std::vector<static_path_oram::Block>& blocks, crypto::Key enc_key, bool steady_state) {
+void SonicORamAdapter::InsertBatch(std::vector<static_path_oram::Block>& blocks, crypto::Key enc_key, bool steady_state, bool all_new) {
   size_t B = blocks.size();
+  
+  if (all_new) {
+      for (size_t j = 0; j < B; ++j) {
+          uint64_t k = blocks[j].meta_.key_;
+          bool real = (!sn::obliv::ct_eq<uint64_t>(k, 0));
+          
+          uint64_t leaf = impl_->GenerateLeaf();
+          if (impl_->with_pos_map && k > 0 && k <= capacity_) {
+              impl_->pos_map[k] = leaf;
+          }
+          
+          std::vector<uint8_t> in_buf(kSonicBlockBytes, 0);
+          size_t block_size = static_path_oram::BlockSize(val_len_);
+          if (block_size <= kSonicBlockBytes) {
+              auto meta_bytes = bytes::ToBytes(blocks[j].meta_);
+              std::copy(meta_bytes.begin(), meta_bytes.end(), in_buf.begin());
+              if (blocks[j].val_) {
+                  std::copy(blocks[j].val_.get(), blocks[j].val_.get() + val_len_, in_buf.data() + sizeof(static_path_oram::BlockMetadata));
+              }
+          }
+          
+          // Oblivious dummy mask
+          if (!real) {
+              std::fill(in_buf.begin(), in_buf.end(), 0);
+          }
+          
+          sn::oram::tree::block<kSonicBlockBytes> new_block{};
+          new_block.address = sn::obliv::ct_select<uint64_t>(k - 1, UINT64_MAX, real);
+          new_block.leaf_ix = sn::obliv::ct_select<uint64_t>(leaf, 0, real);
+          std::copy(in_buf.begin(), in_buf.end(), new_block.data.begin());
+          
+          impl_->client->insert(new_block);
+      }
+      return;
+  }
+
   std::vector<uint64_t> batch_cur_leaves(B, 0);
   std::vector<uint64_t> batch_new_leaves(B, 0);
   std::vector<bool> batch_is_new(B, false);

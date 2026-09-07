@@ -40,7 +40,7 @@ class SonicORamAdapter {
 
   std::vector<static_path_oram::Block> ReadBatch(const std::vector<AccessOp>& ops, crypto::Key enc_key, bool steady_state = true);
   std::vector<static_path_oram::Block> ReadAndRemoveBatch(const std::vector<std::pair<static_path_oram::Key, bool>>& keys_with_real_flags, crypto::Key enc_key, bool steady_state = true);
-  void InsertBatch(std::vector<static_path_oram::Block>& blocks, crypto::Key enc_key, bool steady_state = true);
+  void InsertBatch(std::vector<static_path_oram::Block>& blocks, crypto::Key enc_key, bool steady_state = true, bool all_new = false);
   
   double RawSonicBenchmark(int work_type, size_t batch_size);
   double SpinlockSonicBenchmark(int work_type, size_t batch_size, bool steady_state = false);
