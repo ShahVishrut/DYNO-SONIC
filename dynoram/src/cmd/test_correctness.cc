@@ -251,6 +251,8 @@ void TestORamBatch() {
          "Key 13 should have been cancelled out!");
 
   std::cout << "ORam ExecuteBatch correctness test passed!\n";
+  std::cout << "Final S_small capacity: " << oram->GetSubORamCapacity(0) << ", valid blocks: " << oram->GetSubORamValidCount(0) << "\n";
+  std::cout << "Final S_large capacity: " << oram->GetSubORamCapacity(1) << ", valid blocks: " << oram->GetSubORamValidCount(1) << "\n";
 }
 
 void TestORamComprehensiveMixedWorkload() {
@@ -372,9 +374,18 @@ void TestORamComprehensiveMixedWorkload() {
         }
       }
     }
+    // Verify physical state
+    size_t expected_size = oram->Size();
+    size_t actual_size = oram->GetSubORamValidCount(0) + oram->GetSubORamValidCount(1);
+    std::cout << "    [Physical Check] Expected Size: " << expected_size 
+              << ", S_small: " << oram->GetSubORamValidCount(0) 
+              << ", S_large: " << oram->GetSubORamValidCount(1) << "\n";
+    assert(actual_size == expected_size && "Physical block count must match logical size!");
+    assert(expected_size == shadow_state.size() && "Logical size must match shadow state!");
+
   }
 
-  std::cout << "ORam Comprehensive Mixed Workload test passed!\n";
+  std::cout << "DYNO+SONIC Comprehensive Mixed Workload test passed!\n";
 }
 
 void TestORamDeterministicScale() {

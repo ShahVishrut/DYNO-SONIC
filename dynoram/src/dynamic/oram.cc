@@ -692,7 +692,7 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
   int64_t target_small = x - a;
   int64_t target_large = y + 2*a;
 
-  int64_t k_transfer = a;
+  int64_t k_transfer = a - real_DS;
   bool scale_up = false, scale_down = false;
   int64_t T = 0;
 
