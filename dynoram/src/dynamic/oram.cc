@@ -702,10 +702,10 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
     T = x;
     scale_up = true;
   } else if (target_large <= 0) {
-    k_transfer = -(y - real_DL + real_I);
-    int64_t total_deletes = real_DS + real_DL;
-    int64_t tightened_limit = std::min(static_cast<int64_t>(real_I), total_deletes - (y / 2));
-    T = y + std::max(static_cast<int64_t>(0), tightened_limit);
+    k_transfer = -(static_cast<int64_t>(y) - static_cast<int64_t>(real_DL) + static_cast<int64_t>(real_I));
+    int64_t total_deletes = static_cast<int64_t>(real_DS) + static_cast<int64_t>(real_DL);
+    int64_t tightened_limit = std::min(static_cast<int64_t>(real_I), total_deletes - static_cast<int64_t>(y / 2));
+    T = static_cast<int64_t>(y) + std::max(static_cast<int64_t>(0), tightened_limit);
     scale_down = true;
   } else {
     T = std::max(std::abs(static_cast<int64_t>(original_deletes) - a), std::abs(a));
