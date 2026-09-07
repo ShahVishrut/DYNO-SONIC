@@ -508,6 +508,7 @@ std::vector<static_path_oram::Block> SonicORamAdapter::ReadBatch(const std::vect
 
   int num_workers = 16;
   if (impl_->with_pos_map) {
+      std::cout << "    ... InsertBatch oblivious pos_map scan starting (N=" << capacity_ << ", B=" << B << ")! This will take a while..." << std::endl;
       std::vector<std::thread> workers;
       std::vector<std::vector<uint64_t>> thread_local_leaves(num_workers, std::vector<uint64_t>(B, UINT64_MAX));
       
@@ -559,6 +560,7 @@ std::vector<static_path_oram::Block> SonicORamAdapter::ReadBatch(const std::vect
       int tasks_pending = num_workers;
       
       for (int i = 0; i < num_workers; ++i) {
+          if (chunk_start % 16384 == 0 && i == 0) std::cout << "    ... InsertBatch processing chunk " << chunk_start << " / " << B << std::endl;
           g_access_pool->enqueue([this, i, num_workers, chunk_start, chunk_end, &ops, &batch_cur_leaves, &batch_new_leaves, &results, &thread_access_ops, &ops_mutex, &tasks_pending, &chunk_cv]() {
               try {
                   thread_local SonicClient::access_scratch tl_scratch;

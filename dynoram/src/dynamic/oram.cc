@@ -309,6 +309,7 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
   BatchSwapHook hook{batch, val_len_, elems.data()};
   auto key_ext = [](const OblivElem& e) { return e; };
 
+  std::cout << "[DYNO] Phase 1: O-Sort (Group by Key) starting... B=" << B << std::endl;
   // Phase 1: O-Sort (Group by Key, then Seq)
   auto comp1 = [](const OblivElem& a, const OblivElem& b) {
     bool key_eq = sn::obliv::ct_eq(a.key, b.key);
@@ -325,6 +326,7 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
       elems[i].seq = static_cast<uint32_t>(i);
   }
 
+  std::cout << "[DYNO] Phase 2: Pre-Phase LogMap Scan starting..." << std::endl;
   // Pre-Phase: Oblivious Routing via LogMap Scan
   // MUST happen after bitonic sort because the hook only co-sorts .type/.key/.val,
   // not .phys_k/.sub_oram_idx. Routing here ensures alignment with the sorted batch.
@@ -355,6 +357,7 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
       }
   }
 
+  std::cout << "[DYNO] Phase 3: O-Scan (Collapse) starting..." << std::endl;
   // Phase 2: O-Scan (Collapse) using Two Passes
   // Pass 1: Forward Scan
   // Propagates the latest payload to Search operations, and tracks if the key was deleted.
@@ -503,6 +506,7 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
       batch[orig_idx].phys_k = sn::obliv::ct_select<uint64_t>(assigned_slot, batch[orig_idx].phys_k, needs_slot);
   }
 
+  std::cout << "[DYNO] Phase 4: O-Sort (Group by OpType) starting..." << std::endl;
   // Phase 3: O-Sort (Group by OpType)
   struct NoOpHook {
       void operator()(OblivElem* a, OblivElem* b, bool cond) const {}
@@ -572,6 +576,7 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
     large_ops.push_back(std::move(op_l));
   }
 
+  std::cout << "[DYNO] Phase 5: Sub-ORAM ReadBatch starting..." << std::endl;
   if (sub_orams_[0]) {
       auto read_results = sub_orams_[0]->ReadBatch(small_ops, enc_key, steady_state);
       for (size_t i = 0; i < original_accesses; ++i) {
@@ -670,6 +675,7 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
         }
         sn_inserts.push_back(std::move(new_b));
     }
+    std::cout << "[DYNO] Phase 6: Sub-ORAM InsertBatch starting..." << std::endl;
     sub_orams_[1]->InsertBatch(sn_inserts, enc_key, steady_state);
   }
 
