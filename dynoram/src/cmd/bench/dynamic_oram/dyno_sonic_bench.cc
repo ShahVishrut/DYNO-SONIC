@@ -145,7 +145,7 @@ int main(int argc, char** argv) {
     std::cout << "Starting DYNO+SONIC benchmark\n";
     
     auto enc_key = dyno::crypto::GenerateKey();
-    ORam oram(24, 16); // 2^24 capacity, 16 byte val_len
+    ORam oram(22, 16); // 2^22 capacity, 16 byte val_len (Lowered to fit in RAM)
     
     std::cout << "Initializing ORAM to a baseline state with dummy operations...\n";
     std::vector<ORam::BatchOperation> init_batch;
