@@ -741,7 +741,8 @@ void SonicORamAdapter::InsertBatch(std::vector<static_path_oram::Block>& blocks,
                       
                       size_t block_size = static_path_oram::BlockSize(val_len_);
                       if (block_size <= kSonicBlockBytes) {
-                          bytes::ToBytes(blocks[j].meta_, in_buf.data());
+                          auto meta_bytes = bytes::ToBytes(blocks[j].meta_);
+                          std::copy(meta_bytes.begin(), meta_bytes.end(), in_buf.begin());
                           if (blocks[j].val_) {
                               std::copy(blocks[j].val_.get(), blocks[j].val_.get() + val_len_, in_buf.data() + sizeof(static_path_oram::BlockMetadata));
                           }
