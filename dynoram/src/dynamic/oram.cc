@@ -247,8 +247,13 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
   };
 
   size_t original_inserts = 0;
+  size_t original_deletes = 0;
   for (auto& op : batch) {
-    if (op.type == OpType::Insert) original_inserts++;
+    if (op.type == OpType::Insert) {
+        original_inserts++;
+    } else if (op.type == OpType::Delete) {
+        original_deletes++;
+    }
   }
 
   // Pre-allocate values so we can obliviously swap them in constant time
@@ -702,8 +707,7 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
     T = y + std::max(static_cast<int64_t>(0), tightened_limit);
     scale_down = true;
   } else {
-    int64_t B_size = static_cast<int64_t>(batch.size());
-    T = std::max(std::abs(B_size - a), std::abs(a));
+    T = std::max(std::abs(original_deletes - a), std::abs(a));
   }
 
   // Phase 4: Exact Transfer via LogMap
