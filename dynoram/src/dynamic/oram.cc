@@ -684,13 +684,14 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
     sub_orams_[1]->InsertBatch(sn_inserts, enc_key, steady_state);
   }
 
-  // Phase 4: Oblivious Net Growth & Boundary Checking
-  int64_t a = real_I - real_DS - real_DL;
-  int64_t x = cap_S;
-  int64_t y = cap_L;
+  // Phase 3: Oblivious Bidirectional Transfer Boundaries
+  size_t x = GetSubORamValidCount(0);
+  size_t y = GetSubORamValidCount(1);
+  
+  int64_t a = static_cast<int64_t>(real_I) - static_cast<int64_t>(real_DS) - static_cast<int64_t>(real_DL);
 
-  int64_t target_small = x - a;
-  int64_t target_large = y + 2*a;
+  int64_t target_small = static_cast<int64_t>(x) - a;
+  int64_t target_large = static_cast<int64_t>(y) + 2*a;
 
   int64_t k_transfer = a - real_DS;
   bool scale_up = false, scale_down = false;

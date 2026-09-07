@@ -738,9 +738,13 @@ void SonicORamAdapter::InsertBatch(std::vector<static_path_oram::Block>& blocks,
                       
                       std::vector<uint8_t> in_buf(kSonicBlockBytes, 0);
                       std::vector<uint8_t> out_buf(kSonicBlockBytes, 0);
+                      
                       size_t block_size = static_path_oram::BlockSize(val_len_);
                       if (block_size <= kSonicBlockBytes) {
-                          blocks[j].ToBytes(val_len_, in_buf.data());
+                          bytes::ToBytes(blocks[j].meta_, in_buf.data());
+                          if (blocks[j].val_) {
+                              std::copy(blocks[j].val_.get(), blocks[j].val_.get() + val_len_, in_buf.data() + sizeof(static_path_oram::BlockMetadata));
+                          }
                       }
                       
                       auto pre_ops = impl_->client->state_ref().metrics_snapshot().access_ops;
@@ -754,6 +758,10 @@ void SonicORamAdapter::InsertBatch(std::vector<static_path_oram::Block>& blocks,
                               impl_->client->insert(new_block);
                           }
                       } else {
+                          // Clear pos_map if this is a real read-and-remove
+                          if (real && k > 0 && k <= capacity_) {
+                              impl_->pos_map[k] = UINT64_MAX;
+                          }
                           sn::oram::access_request req;
                           req.address = sn::obliv::ct_select<uint64_t>(k - 1, UINT64_MAX, real);
                           req.cur_leaf = batch_cur_leaves[j];
