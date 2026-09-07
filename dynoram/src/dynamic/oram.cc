@@ -707,7 +707,7 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
     T = y + std::max(static_cast<int64_t>(0), tightened_limit);
     scale_down = true;
   } else {
-    T = std::max(std::abs(original_deletes - a), std::abs(a));
+    T = std::max(std::abs(static_cast<int64_t>(original_deletes) - a), std::abs(a));
   }
 
   // Phase 4: Exact Transfer via LogMap
