@@ -712,64 +712,72 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
     while (T_pow2 < T) T_pow2 *= 2;
 
     auto no_filter = [](Key phys_k) { return true; };
-    std::vector<Key> extracted;
-    std::vector<std::pair<Key, bool>> keys_to_read;
     
-    if (k_transfer > 0) {
-        extracted = sub_orams_[0]->ObliviousExtractValidKeys(k_transfer, T, no_filter);
-    } else if (k_transfer < 0) {
-        extracted = sub_orams_[1]->ObliviousExtractValidKeys(-k_transfer, T, no_filter);
-    } else {
-        extracted.resize(T, 0);
+    bool transfer_up = sn::obliv::ct_gt(k_transfer, static_cast<int64_t>(0));
+    bool transfer_down = sn::obliv::ct_lt(k_transfer, static_cast<int64_t>(0));
+    int64_t abs_k_transfer = sn::obliv::ct_select(-k_transfer, k_transfer, transfer_down);
+    
+    std::vector<Key> extracted_0 = sub_orams_[0]->ObliviousExtractValidKeys(abs_k_transfer, T, no_filter);
+    std::vector<Key> extracted_1 = sub_orams_[1]->ObliviousExtractValidKeys(abs_k_transfer, T, no_filter);
+    
+    std::vector<std::pair<Key, bool>> keys_to_read_0(T), keys_to_read_1(T);
+    for (int64_t i = 0; i < T; ++i) {
+        keys_to_read_0[i] = {extracted_0[i], transfer_up && extracted_0[i] != 0};
+        keys_to_read_1[i] = {extracted_1[i], transfer_down && extracted_1[i] != 0};
+    }
+
+    std::vector<static_path_oram::Block> Buffer_0 = sub_orams_[0]->ReadAndRemoveBatch(keys_to_read_0, enc_key);
+    std::vector<static_path_oram::Block> Buffer_1 = sub_orams_[1]->ReadAndRemoveBatch(keys_to_read_1, enc_key);
+    
+    for (int64_t i = T; i < T_pow2; ++i) {
+        Buffer_0.emplace_back(true);
+        Buffer_1.emplace_back(true);
+        if (val_len_ > 0) {
+            Buffer_0.back().val_ = std::make_unique<uint8_t[]>(val_len_);
+            std::fill(Buffer_0.back().val_.get(), Buffer_0.back().val_.get() + val_len_, 0);
+            Buffer_1.back().val_ = std::make_unique<uint8_t[]>(val_len_);
+            std::fill(Buffer_1.back().val_.get(), Buffer_1.back().val_.get() + val_len_, 0);
+        }
     }
 
     for (int64_t i = 0; i < T; ++i) {
-        keys_to_read.push_back({extracted[i], extracted[i] != 0});
+        uint64_t old_phys_k_0 = Buffer_0[i].meta_.key_;
+        bool is_valid_0 = transfer_up && (old_phys_k_0 != 0);
+        uint64_t log_k_0 = 0;
+        for (uint64_t j = 1; j <= cap_S; ++j) {
+            bool match = is_valid_0 && sn::obliv::ct_eq(j, old_phys_k_0);
+            log_k_0 = sn::obliv::ct_select(log_map_[0][j], log_k_0, match);
+            log_map_[0][j] = sn::obliv::ct_select<uint64_t>(0, log_map_[0][j], match);
+        }
+        uint64_t new_phys_k_0 = 0;
+        for (uint64_t j = 1; j <= cap_L; ++j) {
+            bool is_empty = (log_map_[1][j] == 0);
+            bool select_this = is_valid_0 && is_empty && (new_phys_k_0 == 0);
+            new_phys_k_0 = sn::obliv::ct_select(j, new_phys_k_0, select_this);
+            log_map_[1][j] = sn::obliv::ct_select(log_k_0, log_map_[1][j], select_this);
+        }
+        Buffer_0[i].meta_.key_ = sn::obliv::ct_select(new_phys_k_0, static_cast<uint64_t>(0), is_valid_0);
+
+        uint64_t old_phys_k_1 = Buffer_1[i].meta_.key_;
+        bool is_valid_1 = transfer_down && (old_phys_k_1 != 0);
+        uint64_t log_k_1 = 0;
+        for (uint64_t j = 1; j <= cap_L; ++j) {
+            bool match = is_valid_1 && sn::obliv::ct_eq(j, old_phys_k_1);
+            log_k_1 = sn::obliv::ct_select(log_map_[1][j], log_k_1, match);
+            log_map_[1][j] = sn::obliv::ct_select<uint64_t>(0, log_map_[1][j], match);
+        }
+        uint64_t new_phys_k_1 = 0;
+        for (uint64_t j = 1; j <= cap_S; ++j) {
+            bool is_empty = (log_map_[0][j] == 0);
+            bool select_this = is_valid_1 && is_empty && (new_phys_k_1 == 0);
+            new_phys_k_1 = sn::obliv::ct_select(j, new_phys_k_1, select_this);
+            log_map_[0][j] = sn::obliv::ct_select(log_k_1, log_map_[0][j], select_this);
+        }
+        Buffer_1[i].meta_.key_ = sn::obliv::ct_select(new_phys_k_1, static_cast<uint64_t>(0), is_valid_1);
     }
 
-    std::vector<static_path_oram::Block> Buffer;
-    if (k_transfer > 0) Buffer = sub_orams_[0]->ReadAndRemoveBatch(keys_to_read, enc_key);
-    else if (k_transfer < 0) Buffer = sub_orams_[1]->ReadAndRemoveBatch(keys_to_read, enc_key);
-    
-    if (k_transfer != 0) {
-        for (int64_t i = T; i < T_pow2; ++i) {
-            Buffer.emplace_back(true);
-            if (val_len_ > 0) {
-                Buffer.back().val_ = std::make_unique<uint8_t[]>(val_len_);
-                std::fill(Buffer.back().val_.get(), Buffer.back().val_.get() + val_len_, 0);
-            }
-        }
-        
-        uint64_t from_cap = (k_transfer > 0) ? cap_S : cap_L;
-        uint64_t to_cap = (k_transfer > 0) ? cap_L : cap_S;
-        auto& from_map = (k_transfer > 0) ? log_map_[0] : log_map_[1];
-        auto& to_map = (k_transfer > 0) ? log_map_[1] : log_map_[0];
-        
-        for (int64_t i = 0; i < T; ++i) {
-            uint64_t old_phys_k = Buffer[i].meta_.key_;
-            bool is_valid = (old_phys_k != 0);
-            
-            uint64_t log_k = 0;
-            for (uint64_t j = 1; j <= from_cap; ++j) {
-                bool match = is_valid && sn::obliv::ct_eq(j, old_phys_k);
-                log_k = sn::obliv::ct_select(from_map[j], log_k, match);
-                from_map[j] = sn::obliv::ct_select<uint64_t>(0, from_map[j], match);
-            }
-            
-            uint64_t new_phys_k = 0;
-            for (uint64_t j = 1; j <= to_cap; ++j) {
-                bool is_empty = (to_map[j] == 0);
-                bool select_this = is_valid && is_empty && (new_phys_k == 0);
-                new_phys_k = sn::obliv::ct_select(j, new_phys_k, select_this);
-                to_map[j] = sn::obliv::ct_select(log_k, to_map[j], select_this);
-            }
-            
-            Buffer[i].meta_.key_ = new_phys_k;
-        }
-        
-        if (k_transfer > 0) sub_orams_[1]->InsertBatch(Buffer, enc_key, true);
-        else sub_orams_[0]->InsertBatch(Buffer, enc_key, true);
-    }
+    sub_orams_[1]->InsertBatch(Buffer_0, enc_key, true);
+    sub_orams_[0]->InsertBatch(Buffer_1, enc_key, true);
   }
 
   capacity_ += a;
