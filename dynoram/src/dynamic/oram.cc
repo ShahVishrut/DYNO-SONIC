@@ -347,7 +347,7 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
       op.phys_k = 0;
   }
   
-  int num_workers = 16;
+  int num_workers = 24;
   
   // We process sub_orams_[0] (idx=0) and sub_orams_[1] (idx=1) cleanly in a loop
   for (int idx = 0; idx < 2; ++idx) {

@@ -103,7 +103,7 @@ struct SonicORamAdapter::Impl {
     opts.eviction_rate = 2; 
     opts.routing_depth = 3; 
     opts.evict_batch = 2; 
-    opts.access_concurrency = 16;
+    opts.access_concurrency = 24;
     opts.disjoint_epoch_window = 1024;
 
     client = std::make_unique<SonicClient>(opts, std::move(*eviction_team));
@@ -361,7 +361,7 @@ std::vector<static_path_oram::Block> SonicORamAdapter::ReadAndRemoveBatch(const 
       batch_new_leaves[j] = impl_->GenerateLeaf();
   }
 
-  int num_workers = 16;
+  int num_workers = 24;
   if (impl_->with_pos_map) {
       std::vector<std::thread> workers;
       std::vector<std::vector<uint64_t>> thread_local_leaves(num_workers, std::vector<uint64_t>(B, UINT64_MAX));
@@ -398,7 +398,7 @@ std::vector<static_path_oram::Block> SonicORamAdapter::ReadAndRemoveBatch(const 
       }
   }
 
-  std::call_once(g_pool_init_flag, [](){ g_access_pool = std::make_unique<ThreadPool>(16); });
+  std::call_once(g_pool_init_flag, [](){ g_access_pool = std::make_unique<ThreadPool>(24); });
 
   std::vector<uint64_t> thread_access_ops(num_workers, 0);
   size_t chunk_size = 16;
@@ -534,7 +534,7 @@ std::vector<static_path_oram::Block> SonicORamAdapter::ReadBatch(const std::vect
       batch_new_leaves[j] = impl_->GenerateLeaf();
   }
 
-  int num_workers = 16;
+  int num_workers = 24;
   if (impl_->with_pos_map) {
       std::cout << "    ... InsertBatch oblivious pos_map scan starting (N=" << capacity_ << ", B=" << B << ")! This will take a while..." << std::endl;
       std::vector<std::thread> workers;
@@ -576,7 +576,7 @@ std::vector<static_path_oram::Block> SonicORamAdapter::ReadBatch(const std::vect
       }
   }
 
-  std::call_once(g_pool_init_flag, [](){ g_access_pool = std::make_unique<ThreadPool>(16); });
+  std::call_once(g_pool_init_flag, [](){ g_access_pool = std::make_unique<ThreadPool>(24); });
 
   std::vector<uint64_t> thread_access_ops(num_workers, 0);
   size_t chunk_size = 16;
@@ -698,7 +698,7 @@ void SonicORamAdapter::InsertBatch(std::vector<static_path_oram::Block>& blocks,
       // 2. Parallelized Oblivious PosMap Scan
       // This drops the update time from O(B * N) to O((B * N) / 16)
       if (impl_->with_pos_map) {
-          int num_workers = 16;
+          int num_workers = 24;
           std::vector<std::thread> workers;
           for (int i = 0; i < num_workers; ++i) {
               workers.emplace_back([this, i, num_workers, B, &blocks, &batch_new_leaves]() {
@@ -915,10 +915,10 @@ uint64_t SonicORamAdapter::GenerateRandomLeaf() const {
 }
 
 double SonicORamAdapter::RawSonicBenchmark(int work_type, size_t batch_size) {
-    int num_workers = 16;
-    size_t chunk_size = 32; 
+    int num_workers = 24;
+    size_t chunk_size = 384; 
     
-    std::call_once(g_pool_init_flag, [](){ g_access_pool = std::make_unique<ThreadPool>(16); });
+    std::call_once(g_pool_init_flag, [](){ g_access_pool = std::make_unique<ThreadPool>(24); });
     
     std::mutex ops_mutex;
     std::condition_variable chunk_cv;
@@ -993,8 +993,8 @@ double SonicORamAdapter::RawSonicBenchmark(int work_type, size_t batch_size) {
 
 
 double SonicORamAdapter::SpinlockSonicBenchmark(int work_type, size_t batch_size, bool steady_state) {
-    int num_workers = 16;
-    size_t chunk_size = 32;
+    int num_workers = 24;
+    size_t chunk_size = 384;
     
     if (batch_size % chunk_size != 0) {
         batch_size = ((batch_size / chunk_size) + 1) * chunk_size;
