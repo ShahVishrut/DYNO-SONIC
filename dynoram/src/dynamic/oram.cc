@@ -261,6 +261,11 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
     if (!op.val && val_len_ > 0) {
       op.val = std::make_unique<uint8_t[]>(val_len_);
     }
+    // Pre-allocate result buffers here, BEFORE the bitonic sort shuffles the secrets!
+    if (!op.result.val_ && val_len_ > 0) {
+      op.result.val_ = std::make_unique<uint8_t[]>(val_len_);
+      std::fill(op.result.val_.get(), op.result.val_.get() + val_len_, 0);
+    }
   }
 
   struct alignas(8) OblivElem {
@@ -398,10 +403,6 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
       // Forward latest payload to searches
       bool forward_to_search = is_search & has_payload & !is_deleted;
       if (val_len_ > 0) {
-          if (!batch[elems[i].seq].result.val_) {
-              batch[elems[i].seq].result.val_ = std::make_unique<uint8_t[]>(val_len_);
-              std::fill(batch[elems[i].seq].result.val_.get(), batch[elems[i].seq].result.val_.get() + val_len_, 0);
-          }
           sn::obliv::ct_select_array(batch[elems[i].seq].result.val_.get(), current_payload.data(), batch[elems[i].seq].result.val_.get(), val_len_, forward_to_search);
       }
       batch[elems[i].seq].result.key_ = sn::obliv::ct_select<uint64_t>(1, batch[elems[i].seq].result.key_, forward_to_search);

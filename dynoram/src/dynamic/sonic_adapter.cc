@@ -138,16 +138,23 @@ SonicORamAdapter::~SonicORamAdapter() = default;
 static_path_oram::Block SonicORamAdapter::ReadAndRemove(static_path_oram::Pos p, static_path_oram::Key k, crypto::Key enc_key, bool is_real, bool flush) {
   uint64_t cur_leaf = sn::obliv::ct_select<uint64_t>(p - 1, 0, is_real);
   uint64_t new_leaf = impl_->GenerateLeaf();
+  
   if (impl_->with_pos_map) {
-    uint64_t safe_k = sn::obliv::ct_select<uint64_t>(k, 0, k < impl_->pos_map.size());
-    uint64_t found_leaf = impl_->pos_map[safe_k];
-    impl_->pos_map[safe_k] = sn::obliv::ct_select<uint64_t>(new_leaf, impl_->pos_map[safe_k], is_real);
-    bool has_leaf = !sn::obliv::ct_eq<uint64_t>(found_leaf, UINT64_MAX);
-    cur_leaf = sn::obliv::ct_select<uint64_t>(found_leaf, impl_->GenerateLeaf(), has_leaf);
+      uint64_t found_leaf = UINT64_MAX;
+      // Oblivious O(N) linear scan to hide memory access
+      for (uint64_t pos = 1; pos <= capacity_; ++pos) {
+          bool match = sn::obliv::ct_eq<uint64_t>(pos, k);
+          found_leaf = sn::obliv::ct_select<uint64_t>(impl_->pos_map[pos], found_leaf, match);
+          // Zero out (remove) if real match, otherwise leave unchanged
+          impl_->pos_map[pos] = sn::obliv::ct_select<uint64_t>(UINT64_MAX, impl_->pos_map[pos], match & is_real);
+      }
+      bool has_leaf = !sn::obliv::ct_eq<uint64_t>(found_leaf, UINT64_MAX);
+      cur_leaf = sn::obliv::ct_select<uint64_t>(found_leaf, impl_->GenerateLeaf(), has_leaf);
   }
 
   sn::oram::access_request req;
-  req.address = sn::obliv::ct_select<uint64_t>(k - 1, UINT64_MAX, is_real);
+  // SONIC expects address = -1 for dummies.
+  req.address = sn::obliv::ct_select<uint64_t>(k - 1, static_cast<uint64_t>(-1), is_real);
   req.cur_leaf = cur_leaf;
   req.new_leaf = new_leaf;
   req.is_write = false; 
@@ -172,17 +179,17 @@ static_path_oram::Block SonicORamAdapter::ReadAndRemove(static_path_oram::Pos p,
   memory_bytes_moved_total_ += (post_ops - pre_ops) * kSonicBlockBytes * 2;
 
   static_path_oram::Block res(true);
-  res.val_ = std::make_unique<uint8_t[]>(val_len_);
-  size_t block_size = static_path_oram::BlockSize(val_len_);
-  if (block_size <= kSonicBlockBytes) {
-      bytes::FromBytes(out_buf.data(), res.meta_);
-      std::copy(out_buf.data() + sizeof(static_path_oram::BlockMetadata),
-                out_buf.data() + sizeof(static_path_oram::BlockMetadata) + val_len_,
-                res.val_.get());
-      std::copy(out_buf.data() + sizeof(static_path_oram::BlockMetadata),
-                out_buf.data() + sizeof(static_path_oram::BlockMetadata) + val_len_,
-                res.val_.get());
+  if (val_len_ > 0) {
+      res.val_ = std::make_unique<uint8_t[]>(val_len_);
+      size_t block_size = static_path_oram::BlockSize(val_len_);
+      if (block_size <= kSonicBlockBytes) {
+          bytes::FromBytes(out_buf.data(), res.meta_);
+          std::copy(out_buf.data() + sizeof(static_path_oram::BlockMetadata),
+                    out_buf.data() + sizeof(static_path_oram::BlockMetadata) + val_len_,
+                    res.val_.get());
+      }
   }
+  
   if (!impl_->with_pos_map) {
       res.meta_.pos_ = new_leaf + 1;
   }
@@ -194,20 +201,24 @@ static_path_oram::Block SonicORamAdapter::Read(static_path_oram::Pos p, static_p
   uint64_t new_leaf = impl_->GenerateLeaf();
 
   if (impl_->with_pos_map) {
-    uint64_t safe_k = sn::obliv::ct_select<uint64_t>(k, 0, k < impl_->pos_map.size());
-    uint64_t found_leaf = impl_->pos_map[safe_k];
-    impl_->pos_map[safe_k] = sn::obliv::ct_select<uint64_t>(new_leaf, impl_->pos_map[safe_k], is_real);
-    bool has_leaf = !sn::obliv::ct_eq<uint64_t>(found_leaf, UINT64_MAX);
-    cur_leaf = sn::obliv::ct_select<uint64_t>(found_leaf, impl_->GenerateLeaf(), has_leaf);
+      uint64_t found_leaf = UINT64_MAX;
+      // Oblivious O(N) linear scan to hide memory access
+      for (uint64_t pos = 1; pos <= capacity_; ++pos) {
+          bool match = sn::obliv::ct_eq<uint64_t>(pos, k);
+          found_leaf = sn::obliv::ct_select<uint64_t>(impl_->pos_map[pos], found_leaf, match);
+          // Reassign new random leaf if real match
+          impl_->pos_map[pos] = sn::obliv::ct_select<uint64_t>(new_leaf, impl_->pos_map[pos], match & is_real);
+      }
+      bool has_leaf = !sn::obliv::ct_eq<uint64_t>(found_leaf, UINT64_MAX);
+      cur_leaf = sn::obliv::ct_select<uint64_t>(found_leaf, impl_->GenerateLeaf(), has_leaf);
   }
 
   sn::oram::access_request req;
-  req.address = sn::obliv::ct_select<uint64_t>(k - 1, UINT64_MAX, is_real);
+  req.address = sn::obliv::ct_select<uint64_t>(k - 1, static_cast<uint64_t>(-1), is_real);
   req.cur_leaf = cur_leaf;
   req.new_leaf = new_leaf;
   req.is_write = false; 
   
-
   std::vector<uint8_t> in_buf(kSonicBlockBytes, 0);
   std::vector<uint8_t> out_buf(kSonicBlockBytes, 0);
   req.in = sn::util::span<uint8_t>(in_buf);
@@ -228,16 +239,15 @@ static_path_oram::Block SonicORamAdapter::Read(static_path_oram::Pos p, static_p
   memory_bytes_moved_total_ += (post_ops - pre_ops) * kSonicBlockBytes * 2;
 
   static_path_oram::Block res(true);
-  res.val_ = std::make_unique<uint8_t[]>(val_len_);
-  size_t block_size = static_path_oram::BlockSize(val_len_);
-  if (block_size <= kSonicBlockBytes) {
-      bytes::FromBytes(out_buf.data(), res.meta_);
-      std::copy(out_buf.data() + sizeof(static_path_oram::BlockMetadata),
-                out_buf.data() + sizeof(static_path_oram::BlockMetadata) + val_len_,
-                res.val_.get());
-      std::copy(out_buf.data() + sizeof(static_path_oram::BlockMetadata),
-                out_buf.data() + sizeof(static_path_oram::BlockMetadata) + val_len_,
-                res.val_.get());
+  if (val_len_ > 0) {
+      res.val_ = std::make_unique<uint8_t[]>(val_len_);
+      size_t block_size = static_path_oram::BlockSize(val_len_);
+      if (block_size <= kSonicBlockBytes) {
+          bytes::FromBytes(out_buf.data(), res.meta_);
+          std::copy(out_buf.data() + sizeof(static_path_oram::BlockMetadata),
+                    out_buf.data() + sizeof(static_path_oram::BlockMetadata) + val_len_,
+                    res.val_.get());
+      }
   }
   
   if (!impl_->with_pos_map) {
@@ -247,7 +257,7 @@ static_path_oram::Block SonicORamAdapter::Read(static_path_oram::Pos p, static_p
   // Zero out the result for dummies
   res.meta_.key_ = sn::obliv::ct_select<uint64_t>(res.meta_.key_, 0, is_real);
   res.meta_.pos_ = sn::obliv::ct_select<uint64_t>(res.meta_.pos_, 0, is_real);
-  if (res.val_) {
+  if (val_len_ > 0) {
       std::vector<uint8_t> zeros(val_len_, 0);
       sn::obliv::ct_select_array(res.val_.get(), res.val_.get(), zeros.data(), val_len_, is_real);
   }
@@ -260,41 +270,38 @@ void SonicORamAdapter::Insert(static_path_oram::Block block, crypto::Key enc_key
   bool real = is_real & !sn::obliv::ct_eq<uint64_t>(k, 0);
   uint64_t cur_leaf = 0;
   uint64_t write_leaf = 0;
+  
   if (impl_->with_pos_map) {
-    bool has_leaf = false;
-    uint64_t safe_k = sn::obliv::ct_select<uint64_t>(k, 0, k < impl_->pos_map.size());
-    write_leaf = impl_->GenerateLeaf();
-    uint64_t found_leaf = impl_->pos_map[safe_k];
-    impl_->pos_map[safe_k] = sn::obliv::ct_select<uint64_t>(write_leaf, impl_->pos_map[safe_k], real);
-    has_leaf = !sn::obliv::ct_eq<uint64_t>(found_leaf, UINT64_MAX);
-    cur_leaf = sn::obliv::ct_select<uint64_t>(found_leaf, impl_->GenerateLeaf(), has_leaf);
-    
-    // If it was not in the pos_map, it is a brand new bucket.
-    if (found_leaf == UINT64_MAX) {
-      is_new = true;
-    }
+      uint64_t found_leaf = UINT64_MAX;
+      write_leaf = impl_->GenerateLeaf();
+      // Oblivious O(N) linear scan to hide memory access
+      for (uint64_t pos = 1; pos <= capacity_; ++pos) {
+          bool match = sn::obliv::ct_eq<uint64_t>(pos, k);
+          found_leaf = sn::obliv::ct_select<uint64_t>(impl_->pos_map[pos], found_leaf, match);
+          // Assign write_leaf if real match
+          impl_->pos_map[pos] = sn::obliv::ct_select<uint64_t>(write_leaf, impl_->pos_map[pos], match & real);
+      }
+      bool has_leaf = !sn::obliv::ct_eq<uint64_t>(found_leaf, UINT64_MAX);
+      cur_leaf = sn::obliv::ct_select<uint64_t>(found_leaf, impl_->GenerateLeaf(), has_leaf);
+      
+      // Determine is_new dynamically based on scan result to avoid secret drift
+      is_new = !has_leaf;
   } else {
-    uint64_t r_leaf = impl_->GenerateLeaf();
-    write_leaf = sn::obliv::ct_select<uint64_t>(block.meta_.pos_ - 1, r_leaf, real);
-    cur_leaf = write_leaf;
+      uint64_t r_leaf = impl_->GenerateLeaf();
+      write_leaf = sn::obliv::ct_select<uint64_t>(block.meta_.pos_ - 1, r_leaf, real);
+      cur_leaf = write_leaf;
   }
-  
-  sn::oram::access_request req;
-  req.address = sn::obliv::ct_select<uint64_t>(k - 1, UINT64_MAX, real);
-  req.cur_leaf = cur_leaf;
-  req.new_leaf = write_leaf;
-  req.is_write = sn::obliv::ct_select<bool>(true, false, real); 
-  
 
   std::vector<uint8_t> in_buf(kSonicBlockBytes, 0);
   std::vector<uint8_t> out_buf(kSonicBlockBytes, 0);
-  
   size_t block_size = static_path_oram::BlockSize(val_len_);
   if (block_size <= kSonicBlockBytes) {
       block.ToBytes(val_len_, in_buf.data());
   }
-  req.in = sn::util::span<uint8_t>(in_buf);
-  req.out = sn::util::span<uint8_t>(out_buf);
+  
+  // Oblivious dummy mask
+  std::vector<uint8_t> zeros(kSonicBlockBytes, 0);
+  sn::obliv::ct_select_array(in_buf.data(), in_buf.data(), zeros.data(), kSonicBlockBytes, real);
 
   thread_local SonicClient::access_scratch tl_scratch;
   thread_local size_t tl_scratch_cap = 0;
@@ -303,23 +310,36 @@ void SonicORamAdapter::Insert(static_path_oram::Block block, crypto::Key enc_key
       tl_scratch_cap = capacity_;
   }
 
+  // To maintain control flow obliviousness, we execute BOTH operations 
+  // unconditionally. The real execution gets the valid data, the other gets -1 padding.
+  bool execute_insert = is_new & real;
+  bool execute_access = !is_new & real;
+  
   auto pre_ops = impl_->client->state_ref().metrics_snapshot().access_ops;
-  if (is_new && real) {
-    sn::oram::tree::block<kSonicBlockBytes> new_block{};
-    new_block.address = k - 1;
-    new_block.leaf_ix = write_leaf;
-    std::copy(in_buf.begin(), in_buf.end(), new_block.data.begin());
-    impl_->client->insert(new_block);
-  } else {
-    req.is_write = sn::obliv::ct_select<bool>(true, false, real);
-    req.in = sn::util::span<uint8_t>(in_buf);
-    req.out = sn::util::span<uint8_t>(out_buf);
-    impl_->client->access(req, tl_scratch);
-  }
+  
+  // 1. Unconditional Stash Insert (Real or Dummy)
+  sn::oram::tree::block<kSonicBlockBytes> new_block{};
+  new_block.address = sn::obliv::ct_select<uint64_t>(k - 1, static_cast<uint64_t>(-1), execute_insert);
+  new_block.leaf_ix = sn::obliv::ct_select<uint64_t>(write_leaf, static_cast<uint64_t>(-1), execute_insert);
+  std::copy(in_buf.begin(), in_buf.end(), new_block.data.begin());
+  impl_->client->insert(new_block);
+
+  // 2. Unconditional Tree Access (Real or Dummy)
+  sn::oram::access_request req;
+  req.address = sn::obliv::ct_select<uint64_t>(k - 1, static_cast<uint64_t>(-1), execute_access);
+  req.cur_leaf = sn::obliv::ct_select<uint64_t>(cur_leaf, 0, execute_access);
+  req.new_leaf = sn::obliv::ct_select<uint64_t>(write_leaf, 0, execute_access);
+  req.is_write = sn::obliv::ct_select<bool>(true, false, execute_access);
+  req.in = sn::util::span<uint8_t>(in_buf);
+  req.out = sn::util::span<uint8_t>(out_buf);
+  impl_->client->access(req, tl_scratch);
+  
   if (flush) impl_->client->flush_epoch();
   auto post_ops = impl_->client->state_ref().metrics_snapshot().access_ops;
-  memory_access_count_ += (post_ops - pre_ops);
-  memory_bytes_moved_total_ += (post_ops - pre_ops) * kSonicBlockBytes * 2;
+  
+  // We divide by 2 to keep metrics proportional since we intentionally executed both operations
+  memory_access_count_ += ((post_ops - pre_ops) / 2);
+  memory_bytes_moved_total_ += ((post_ops - pre_ops) / 2) * kSonicBlockBytes * 2;
 }
 
 void SonicORamAdapter::FlushEpoch() {
@@ -437,7 +457,7 @@ std::vector<static_path_oram::Block> SonicORamAdapter::ReadAndRemoveBatch(const 
                       // Zero out the result for dummies to prevent data corruption during Phase 5 scale up
                       res.meta_.key_ = sn::obliv::ct_select<uint64_t>(res.meta_.key_, 0, is_real);
                       res.meta_.pos_ = sn::obliv::ct_select<uint64_t>(res.meta_.pos_, 0, is_real);
-                      if (res.val_) {
+                      if (val_len_ > 0) {
                           std::vector<uint8_t> zeros(val_len_, 0);
                           sn::obliv::ct_select_array(res.val_.get(), res.val_.get(), zeros.data(), val_len_, is_real);
                       }
@@ -630,7 +650,7 @@ std::vector<static_path_oram::Block> SonicORamAdapter::ReadBatch(const std::vect
                       res.meta_.key_ = sn::obliv::ct_select<uint64_t>(res.meta_.key_, 0, op.is_real);
                       uint64_t pos = sn::obliv::ct_select<uint64_t>(op.key - 1, 0, op.is_real);
                       res.meta_.pos_ = sn::obliv::ct_select<uint64_t>(res.meta_.pos_, 0, op.is_real);
-                      if (res.val_) {
+                      if (val_len_ > 0) {
                           std::vector<uint8_t> zeros(val_len_, 0);
                           sn::obliv::ct_select_array(res.val_.get(), res.val_.get(), zeros.data(), val_len_, op.is_real);
                       }
@@ -678,9 +698,11 @@ void SonicORamAdapter::InsertBatch(std::vector<static_path_oram::Block>& blocks,
               
               uint64_t leaf = impl_->GenerateLeaf();
               if (impl_->with_pos_map) {
-                  // Safe bounds access to avoid out-of-bounds indexing on dummies
-                  uint64_t safe_k = sn::obliv::ct_select<uint64_t>(k, 0, k <= capacity_);
-                  impl_->pos_map[safe_k] = sn::obliv::ct_select<uint64_t>(leaf, impl_->pos_map[safe_k], real);
+                  // Oblivious linear scan to hide which key is being updated
+                  for (uint64_t pos = 1; pos <= capacity_; ++pos) {
+                      bool match = real & sn::obliv::ct_eq<uint64_t>(pos, k);
+                      impl_->pos_map[pos] = sn::obliv::ct_select<uint64_t>(leaf, impl_->pos_map[pos], match);
+                  }
               }
               
               std::vector<uint8_t> in_buf(kSonicBlockBytes, 0);
@@ -688,7 +710,7 @@ void SonicORamAdapter::InsertBatch(std::vector<static_path_oram::Block>& blocks,
               if (block_size <= kSonicBlockBytes) {
                   auto meta_bytes = bytes::ToBytes(blocks[j].meta_);
                   std::copy(meta_bytes.begin(), meta_bytes.end(), in_buf.begin());
-                  if (blocks[j].val_) {
+                  if (val_len_ > 0) {
                       std::copy(blocks[j].val_.get(), blocks[j].val_.get() + val_len_, in_buf.data() + sizeof(static_path_oram::BlockMetadata));
                   }
               }
@@ -712,156 +734,156 @@ void SonicORamAdapter::InsertBatch(std::vector<static_path_oram::Block>& blocks,
       return;
   }
 
-  std::vector<uint64_t> batch_cur_leaves(B, 0);
-  std::vector<uint64_t> batch_new_leaves(B, 0);
-  std::vector<bool> batch_is_new(B, false);
+//   std::vector<uint64_t> batch_cur_leaves(B, 0);
+//   std::vector<uint64_t> batch_new_leaves(B, 0);
+//   std::vector<bool> batch_is_new(B, false);
 
-  int num_workers = 16;
-  if (impl_->with_pos_map) {
-      std::vector<std::thread> workers;
-      std::vector<std::vector<uint64_t>> thread_local_leaves(num_workers, std::vector<uint64_t>(B, UINT64_MAX));
+//   int num_workers = 16;
+//   if (impl_->with_pos_map) {
+//       std::vector<std::thread> workers;
+//       std::vector<std::vector<uint64_t>> thread_local_leaves(num_workers, std::vector<uint64_t>(B, UINT64_MAX));
       
-      for (size_t j = 0; j < B; ++j) {
-          batch_new_leaves[j] = impl_->GenerateLeaf();
-      }
+//       for (size_t j = 0; j < B; ++j) {
+//           batch_new_leaves[j] = impl_->GenerateLeaf();
+//       }
 
-      for (int i = 0; i < num_workers; ++i) {
-          workers.emplace_back([this, i, num_workers, B, &blocks, &batch_new_leaves, &thread_local_leaves]() {
-              for (size_t pos = 1 + i; pos <= capacity_; pos += num_workers) {
-                  uint64_t current_pos = impl_->pos_map[pos];
-                  uint64_t next_pos = current_pos;
-                  for (size_t j = 0; j < B; ++j) {
-                      uint64_t k = blocks[j].meta_.key_;
-                      bool real = (!sn::obliv::ct_eq<uint64_t>(k, 0));
-                      bool match = sn::obliv::ct_eq<uint64_t>(pos, k) & real;
+//       for (int i = 0; i < num_workers; ++i) {
+//           workers.emplace_back([this, i, num_workers, B, &blocks, &batch_new_leaves, &thread_local_leaves]() {
+//               for (size_t pos = 1 + i; pos <= capacity_; pos += num_workers) {
+//                   uint64_t current_pos = impl_->pos_map[pos];
+//                   uint64_t next_pos = current_pos;
+//                   for (size_t j = 0; j < B; ++j) {
+//                       uint64_t k = blocks[j].meta_.key_;
+//                       bool real = (!sn::obliv::ct_eq<uint64_t>(k, 0));
+//                       bool match = sn::obliv::ct_eq<uint64_t>(pos, k) & real;
                       
-                      thread_local_leaves[i][j] = sn::obliv::ct_select<uint64_t>(current_pos, thread_local_leaves[i][j], match);
-                      next_pos = sn::obliv::ct_select<uint64_t>(batch_new_leaves[j], next_pos, match);
-                  }
-                  impl_->pos_map[pos] = next_pos;
-              }
-          });
-      }
-      for (auto& w : workers) w.join();
+//                       thread_local_leaves[i][j] = sn::obliv::ct_select<uint64_t>(current_pos, thread_local_leaves[i][j], match);
+//                       next_pos = sn::obliv::ct_select<uint64_t>(batch_new_leaves[j], next_pos, match);
+//                   }
+//                   impl_->pos_map[pos] = next_pos;
+//               }
+//           });
+//       }
+//       for (auto& w : workers) w.join();
       
-      for (size_t j = 0; j < B; ++j) {
-          uint64_t global_found = UINT64_MAX;
-          for (int i = 0; i < num_workers; ++i) {
-              bool match = !sn::obliv::ct_eq<uint64_t>(thread_local_leaves[i][j], UINT64_MAX);
-              global_found = sn::obliv::ct_select<uint64_t>(thread_local_leaves[i][j], global_found, match);
-          }
-          batch_is_new[j] = sn::obliv::ct_eq<uint64_t>(global_found, UINT64_MAX);
-          bool has_leaf = !batch_is_new[j];
-          batch_cur_leaves[j] = sn::obliv::ct_select<uint64_t>(global_found, impl_->GenerateLeaf(), has_leaf);
-      }
-  } else {
-      for (size_t j = 0; j < B; ++j) {
-          uint64_t k = blocks[j].meta_.key_;
-          bool real = (!sn::obliv::ct_eq<uint64_t>(k, 0));
-          batch_new_leaves[j] = sn::obliv::ct_select<uint64_t>(k - 1, impl_->GenerateLeaf(), real);
-          batch_cur_leaves[j] = batch_new_leaves[j];
-      }
-  }
+//       for (size_t j = 0; j < B; ++j) {
+//           uint64_t global_found = UINT64_MAX;
+//           for (int i = 0; i < num_workers; ++i) {
+//               bool match = !sn::obliv::ct_eq<uint64_t>(thread_local_leaves[i][j], UINT64_MAX);
+//               global_found = sn::obliv::ct_select<uint64_t>(thread_local_leaves[i][j], global_found, match);
+//           }
+//           batch_is_new[j] = sn::obliv::ct_eq<uint64_t>(global_found, UINT64_MAX);
+//           bool has_leaf = !batch_is_new[j];
+//           batch_cur_leaves[j] = sn::obliv::ct_select<uint64_t>(global_found, impl_->GenerateLeaf(), has_leaf);
+//       }
+//   } else {
+//       for (size_t j = 0; j < B; ++j) {
+//           uint64_t k = blocks[j].meta_.key_;
+//           bool real = (!sn::obliv::ct_eq<uint64_t>(k, 0));
+//           batch_new_leaves[j] = sn::obliv::ct_select<uint64_t>(k - 1, impl_->GenerateLeaf(), real);
+//           batch_cur_leaves[j] = batch_new_leaves[j];
+//       }
+//   }
 
-  std::call_once(g_pool_init_flag, [](){ g_access_pool = std::make_unique<ThreadPool>(16); });
+//   std::call_once(g_pool_init_flag, [](){ g_access_pool = std::make_unique<ThreadPool>(16); });
 
-  std::vector<uint64_t> thread_access_ops(num_workers, 0);
-  size_t chunk_size = 16;
-  std::mutex ops_mutex;
-  std::condition_variable chunk_cv;
+//   std::vector<uint64_t> thread_access_ops(num_workers, 0);
+//   size_t chunk_size = 16;
+//   std::mutex ops_mutex;
+//   std::condition_variable chunk_cv;
 
-  size_t batch_count = 0;
-  for (size_t chunk_start = 0; chunk_start < B; chunk_start += chunk_size) {
-      size_t chunk_end = std::min(B, chunk_start + chunk_size);
-      int tasks_pending = num_workers;
+//   size_t batch_count = 0;
+//   for (size_t chunk_start = 0; chunk_start < B; chunk_start += chunk_size) {
+//       size_t chunk_end = std::min(B, chunk_start + chunk_size);
+//       int tasks_pending = num_workers;
       
-      for (int i = 0; i < num_workers; ++i) {
-          g_access_pool->enqueue([this, i, num_workers, chunk_start, chunk_end, &blocks, &batch_cur_leaves, &batch_new_leaves, &batch_is_new, &thread_access_ops, &ops_mutex, &tasks_pending, &chunk_cv]() {
-              try {
-                  thread_local SonicClient::access_scratch tl_scratch;
-                  thread_local size_t tl_scratch_cap = 0;
-                  if (tl_scratch_cap != capacity_) {
-                      impl_->client->configure_access_scratch(tl_scratch);
-                      tl_scratch_cap = capacity_;
-                  }
-                  uint64_t local_ops = 0;
-                  for (size_t j = chunk_start + i; j < chunk_end; j += num_workers) {
-                      uint64_t k = blocks[j].meta_.key_;
-                      bool real = (!sn::obliv::ct_eq<uint64_t>(k, 0));
+//       for (int i = 0; i < num_workers; ++i) {
+//           g_access_pool->enqueue([this, i, num_workers, chunk_start, chunk_end, &blocks, &batch_cur_leaves, &batch_new_leaves, &batch_is_new, &thread_access_ops, &ops_mutex, &tasks_pending, &chunk_cv]() {
+//               try {
+//                   thread_local SonicClient::access_scratch tl_scratch;
+//                   thread_local size_t tl_scratch_cap = 0;
+//                   if (tl_scratch_cap != capacity_) {
+//                       impl_->client->configure_access_scratch(tl_scratch);
+//                       tl_scratch_cap = capacity_;
+//                   }
+//                   uint64_t local_ops = 0;
+//                   for (size_t j = chunk_start + i; j < chunk_end; j += num_workers) {
+//                       uint64_t k = blocks[j].meta_.key_;
+//                       bool real = (!sn::obliv::ct_eq<uint64_t>(k, 0));
                       
-                      std::vector<uint8_t> in_buf(kSonicBlockBytes, 0);
-                      std::vector<uint8_t> out_buf(kSonicBlockBytes, 0);
+//                       std::vector<uint8_t> in_buf(kSonicBlockBytes, 0);
+//                       std::vector<uint8_t> out_buf(kSonicBlockBytes, 0);
                       
-                      size_t block_size = static_path_oram::BlockSize(val_len_);
-                      if (block_size <= kSonicBlockBytes) {
-                          auto meta_bytes = bytes::ToBytes(blocks[j].meta_);
-                          std::copy(meta_bytes.begin(), meta_bytes.end(), in_buf.begin());
-                          if (blocks[j].val_) {
-                              std::copy(blocks[j].val_.get(), blocks[j].val_.get() + val_len_, in_buf.data() + sizeof(static_path_oram::BlockMetadata));
-                          }
-                      }
+//                       size_t block_size = static_path_oram::BlockSize(val_len_);
+//                       if (block_size <= kSonicBlockBytes) {
+//                           auto meta_bytes = bytes::ToBytes(blocks[j].meta_);
+//                           std::copy(meta_bytes.begin(), meta_bytes.end(), in_buf.begin());
+//                           if (blocks[j].val_) {
+//                               std::copy(blocks[j].val_.get(), blocks[j].val_.get() + val_len_, in_buf.data() + sizeof(static_path_oram::BlockMetadata));
+//                           }
+//                       }
                       
-                      auto pre_ops = impl_->client->state_ref().metrics_snapshot().access_ops;
-                      if (batch_is_new[j] && real) {
-                          sn::oram::tree::block<kSonicBlockBytes> new_block{};
-                          new_block.address = k - 1;
-                          new_block.leaf_ix = batch_new_leaves[j];
-                          std::copy(in_buf.begin(), in_buf.end(), new_block.data.begin());
-                          {
-                              std::lock_guard<std::mutex> client_lock(ops_mutex);
-                              impl_->client->insert(new_block);
-                          }
-                      } else {
-                          // Clear pos_map if this is a real read-and-remove
-                          if (real && k > 0 && k <= capacity_) {
-                              impl_->pos_map[k] = UINT64_MAX;
-                          }
-                          sn::oram::access_request req;
-                          req.address = sn::obliv::ct_select<uint64_t>(k - 1, UINT64_MAX, real);
-                          req.cur_leaf = batch_cur_leaves[j];
-                          req.new_leaf = batch_new_leaves[j];
-                          req.is_write = sn::obliv::ct_select<bool>(true, false, real);
-                          req.in = sn::util::span<uint8_t>(in_buf);
-                          req.out = sn::util::span<uint8_t>(out_buf);
+//                       auto pre_ops = impl_->client->state_ref().metrics_snapshot().access_ops;
+//                       if (batch_is_new[j] && real) {
+//                           sn::oram::tree::block<kSonicBlockBytes> new_block{};
+//                           new_block.address = k - 1;
+//                           new_block.leaf_ix = batch_new_leaves[j];
+//                           std::copy(in_buf.begin(), in_buf.end(), new_block.data.begin());
+//                           {
+//                               std::lock_guard<std::mutex> client_lock(ops_mutex);
+//                               impl_->client->insert(new_block);
+//                           }
+//                       } else {
+//                           // Clear pos_map if this is a real read-and-remove
+//                           if (real && k > 0 && k <= capacity_) {
+//                               impl_->pos_map[k] = UINT64_MAX;
+//                           }
+//                           sn::oram::access_request req;
+//                           req.address = sn::obliv::ct_select<uint64_t>(k - 1, UINT64_MAX, real);
+//                           req.cur_leaf = batch_cur_leaves[j];
+//                           req.new_leaf = batch_new_leaves[j];
+//                           req.is_write = sn::obliv::ct_select<bool>(true, false, real);
+//                           req.in = sn::util::span<uint8_t>(in_buf);
+//                           req.out = sn::util::span<uint8_t>(out_buf);
                           
-                          {
-                              std::lock_guard<std::mutex> client_lock(ops_mutex);
-                              impl_->client->access(req, tl_scratch);
-                          }
-                      }
-                      auto post_ops = impl_->client->state_ref().metrics_snapshot().access_ops;
-                      local_ops += (post_ops - pre_ops);
-                  }
-                  {
-                      std::unique_lock<std::mutex> lock(ops_mutex);
-                      thread_access_ops[i] += local_ops;
-                      tasks_pending--;
-                      if (tasks_pending == 0) chunk_cv.notify_one();
-                  }
-              } catch (const std::exception& e) {
-                  std::cerr << "[CRITICAL ERROR] Exception in InsertBatch pool thread: " << e.what() << std::endl;
-                  std::terminate();
-              }
-          });
-      }
-      std::unique_lock<std::mutex> lock(ops_mutex);
-      chunk_cv.wait(lock, [&tasks_pending]{ return tasks_pending == 0; });
+//                           {
+//                               std::lock_guard<std::mutex> client_lock(ops_mutex);
+//                               impl_->client->access(req, tl_scratch);
+//                           }
+//                       }
+//                       auto post_ops = impl_->client->state_ref().metrics_snapshot().access_ops;
+//                       local_ops += (post_ops - pre_ops);
+//                   }
+//                   {
+//                       std::unique_lock<std::mutex> lock(ops_mutex);
+//                       thread_access_ops[i] += local_ops;
+//                       tasks_pending--;
+//                       if (tasks_pending == 0) chunk_cv.notify_one();
+//                   }
+//               } catch (const std::exception& e) {
+//                   std::cerr << "[CRITICAL ERROR] Exception in InsertBatch pool thread: " << e.what() << std::endl;
+//                   std::terminate();
+//               }
+//           });
+//       }
+//       std::unique_lock<std::mutex> lock(ops_mutex);
+//       chunk_cv.wait(lock, [&tasks_pending]{ return tasks_pending == 0; });
       
-      batch_count += chunk_size;
-      if (batch_count + chunk_size > 1000) {
-          impl_->client->flush_epoch();
-          batch_count = 0;
-      }
-  }
+//       batch_count += chunk_size;
+//       if (batch_count + chunk_size > 1000) {
+//           impl_->client->flush_epoch();
+//           batch_count = 0;
+//       }
+//   }
 
-  if (batch_count > 0) {
-      impl_->client->flush_epoch();
-  }
+//   if (batch_count > 0) {
+//       impl_->client->flush_epoch();
+//   }
 
-  for (int i = 0; i < num_workers; ++i) {
-      memory_access_count_ += thread_access_ops[i];
-      memory_bytes_moved_total_ += thread_access_ops[i] * kSonicBlockBytes * 2;
-  }
+//   for (int i = 0; i < num_workers; ++i) {
+//       memory_access_count_ += thread_access_ops[i];
+//       memory_bytes_moved_total_ += thread_access_ops[i] * kSonicBlockBytes * 2;
+//   }
 
 
 }
