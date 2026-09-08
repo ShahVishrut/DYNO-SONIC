@@ -407,8 +407,10 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
       batch[elems[i].seq].result.key_ = sn::obliv::ct_select<uint64_t>(1, batch[elems[i].seq].result.key_, forward_to_search);
       
       // Searches resolved from previous operations in batch become dummy
+      // Updates on deleted keys are invalid no-ops and must also become dummy
       bool search_becomes_dummy = (is_search & has_payload) | (is_search & is_deleted);
-      sn::obliv::ct_set_ref(elems[i].is_dummy, true, search_becomes_dummy);
+      bool update_becomes_dummy = is_update & is_deleted;
+      sn::obliv::ct_set_ref(elems[i].is_dummy, true, search_becomes_dummy | update_becomes_dummy);
   }
 
   // Pass 2: Backward Scan (Semantic Deduplication)
