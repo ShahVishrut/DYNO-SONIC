@@ -479,9 +479,9 @@ std::vector<static_path_oram::Block> SonicORamAdapter::ReadAndRemoveBatch(const 
       
       std::unique_lock<std::mutex> lock(ops_mutex);
       chunk_cv.wait(lock, [&tasks_pending]{ return tasks_pending == 0; });
-      if (steady_state) {
-          impl_->client->flush_epoch();
-      }
+      
+      // SONIC MUST flush periodically to prevent disjoint window overflow
+      impl_->client->flush_epoch();
   }
 
   for (int i = 0; i < num_workers; ++i) {
@@ -536,7 +536,7 @@ std::vector<static_path_oram::Block> SonicORamAdapter::ReadBatch(const std::vect
 
   int num_workers = 24;
   if (impl_->with_pos_map) {
-      std::cout << "    ... InsertBatch oblivious pos_map scan starting (N=" << capacity_ << ", B=" << B << ")! This will take a while..." << std::endl;
+      std::cout << "    ... ReadBatch oblivious pos_map scan starting (N=" << capacity_ << ", B=" << B << ")!" << std::endl;
       std::vector<std::thread> workers;
       std::vector<std::vector<uint64_t>> thread_local_leaves(num_workers, std::vector<uint64_t>(B, UINT64_MAX));
       
@@ -671,9 +671,9 @@ std::vector<static_path_oram::Block> SonicORamAdapter::ReadBatch(const std::vect
       }
       std::unique_lock<std::mutex> lock(ops_mutex);
       chunk_cv.wait(lock, [&tasks_pending]{ return tasks_pending == 0; });
-      if (steady_state) {
-          impl_->client->flush_epoch();
-      }
+      
+      // SONIC MUST flush periodically to prevent disjoint window overflow
+      impl_->client->flush_epoch();
   }
 
   for (int i = 0; i < num_workers; ++i) {
@@ -749,9 +749,7 @@ void SonicORamAdapter::InsertBatch(std::vector<static_path_oram::Block>& blocks,
               
               impl_->client->insert(new_block);
           }
-          if (steady_state) {
-              impl_->client->flush_epoch();
-          }
+          impl_->client->flush_epoch();
       }
       return;
   }
