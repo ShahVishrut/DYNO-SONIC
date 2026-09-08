@@ -669,36 +669,44 @@ void SonicORamAdapter::InsertBatch(std::vector<static_path_oram::Block>& blocks,
   size_t B = blocks.size();
   
   if (all_new) {
-      for (size_t j = 0; j < B; ++j) {
-          uint64_t k = blocks[j].meta_.key_;
-          bool real = (!sn::obliv::ct_eq<uint64_t>(k, 0));
-          
-          uint64_t leaf = impl_->GenerateLeaf();
-          if (impl_->with_pos_map && k > 0 && k <= capacity_) {
-              impl_->pos_map[k] = leaf;
-          }
-          
-          std::vector<uint8_t> in_buf(kSonicBlockBytes, 0);
-          size_t block_size = static_path_oram::BlockSize(val_len_);
-          if (block_size <= kSonicBlockBytes) {
-              auto meta_bytes = bytes::ToBytes(blocks[j].meta_);
-              std::copy(meta_bytes.begin(), meta_bytes.end(), in_buf.begin());
-              if (blocks[j].val_) {
-                  std::copy(blocks[j].val_.get(), blocks[j].val_.get() + val_len_, in_buf.data() + sizeof(static_path_oram::BlockMetadata));
+      size_t chunk_size = 512; // Periodic flush to prevent ZingORAM stash overflow
+      for (size_t chunk_start = 0; chunk_start < B; chunk_start += chunk_size) {
+          size_t chunk_end = std::min(B, chunk_start + chunk_size);
+          for (size_t j = chunk_start; j < chunk_end; ++j) {
+              uint64_t k = blocks[j].meta_.key_;
+              bool real = (!sn::obliv::ct_eq<uint64_t>(k, 0));
+              
+              uint64_t leaf = impl_->GenerateLeaf();
+              if (impl_->with_pos_map) {
+                  // Safe bounds access to avoid out-of-bounds indexing on dummies
+                  uint64_t safe_k = sn::obliv::ct_select<uint64_t>(k, 0, k <= capacity_);
+                  impl_->pos_map[safe_k] = sn::obliv::ct_select<uint64_t>(leaf, impl_->pos_map[safe_k], real);
               }
+              
+              std::vector<uint8_t> in_buf(kSonicBlockBytes, 0);
+              size_t block_size = static_path_oram::BlockSize(val_len_);
+              if (block_size <= kSonicBlockBytes) {
+                  auto meta_bytes = bytes::ToBytes(blocks[j].meta_);
+                  std::copy(meta_bytes.begin(), meta_bytes.end(), in_buf.begin());
+                  if (blocks[j].val_) {
+                      std::copy(blocks[j].val_.get(), blocks[j].val_.get() + val_len_, in_buf.data() + sizeof(static_path_oram::BlockMetadata));
+                  }
+              }
+              
+              // Oblivious dummy mask
+              std::vector<uint8_t> zeros(kSonicBlockBytes, 0);
+              sn::obliv::ct_select_array(in_buf.data(), in_buf.data(), zeros.data(), kSonicBlockBytes, real);
+              
+              sn::oram::tree::block<kSonicBlockBytes> new_block{};
+              new_block.address = sn::obliv::ct_select<uint64_t>(k - 1, UINT64_MAX, real);
+              new_block.leaf_ix = sn::obliv::ct_select<uint64_t>(leaf, 0, real);
+              std::copy(in_buf.begin(), in_buf.end(), new_block.data.begin());
+              
+              impl_->client->insert(new_block);
           }
-          
-          // Oblivious dummy mask
-          if (!real) {
-              std::fill(in_buf.begin(), in_buf.end(), 0);
+          if (steady_state) {
+              impl_->client->flush_epoch();
           }
-          
-          sn::oram::tree::block<kSonicBlockBytes> new_block{};
-          new_block.address = sn::obliv::ct_select<uint64_t>(k - 1, UINT64_MAX, real);
-          new_block.leaf_ix = sn::obliv::ct_select<uint64_t>(leaf, 0, real);
-          std::copy(in_buf.begin(), in_buf.end(), new_block.data.begin());
-          
-          impl_->client->insert(new_block);
       }
       return;
   }
