@@ -689,21 +689,43 @@ void SonicORamAdapter::InsertBatch(std::vector<static_path_oram::Block>& blocks,
   size_t B = blocks.size();
   
   if (all_new) {
-      size_t chunk_size = 512; // Periodic flush to let SONIC garbage-collect dummies
+      // 1. Pre-generate all random leaves for the batch
+      std::vector<uint64_t> batch_new_leaves(B, 0);
+      for (size_t j = 0; j < B; ++j) {
+          batch_new_leaves[j] = impl_->GenerateLeaf();
+      }
+
+      // 2. Parallelized Oblivious PosMap Scan
+      // This drops the update time from O(B * N) to O((B * N) / 16)
+      if (impl_->with_pos_map) {
+          int num_workers = 16;
+          std::vector<std::thread> workers;
+          for (int i = 0; i < num_workers; ++i) {
+              workers.emplace_back([this, i, num_workers, B, &blocks, &batch_new_leaves]() {
+                  for (size_t pos = 1 + i; pos <= capacity_; pos += num_workers) {
+                      uint64_t current_pos = impl_->pos_map[pos];
+                      uint64_t next_pos = current_pos;
+                      for (size_t j = 0; j < B; ++j) {
+                          uint64_t k = blocks[j].meta_.key_;
+                          bool real = (!sn::obliv::ct_eq<uint64_t>(k, 0));
+                          bool match = real & sn::obliv::ct_eq<uint64_t>(pos, k);
+                          next_pos = sn::obliv::ct_select<uint64_t>(batch_new_leaves[j], next_pos, match);
+                      }
+                      impl_->pos_map[pos] = next_pos;
+                  }
+              });
+          }
+          for (auto& w : workers) w.join();
+      }
+
+      // 3. Chunked Stash Insertion (now fully decoupled from the map scan)
+      size_t chunk_size = 512;
       for (size_t chunk_start = 0; chunk_start < B; chunk_start += chunk_size) {
           size_t chunk_end = std::min(B, chunk_start + chunk_size);
           for (size_t j = chunk_start; j < chunk_end; ++j) {
               uint64_t k = blocks[j].meta_.key_;
               bool real = (!sn::obliv::ct_eq<uint64_t>(k, 0));
-              
-              uint64_t leaf = impl_->GenerateLeaf();
-              if (impl_->with_pos_map) {
-                  // Oblivious linear scan to hide which key is being updated
-                  for (uint64_t pos = 1; pos <= capacity_; ++pos) {
-                      bool match = real & sn::obliv::ct_eq<uint64_t>(pos, k);
-                      impl_->pos_map[pos] = sn::obliv::ct_select<uint64_t>(leaf, impl_->pos_map[pos], match);
-                  }
-              }
+              uint64_t leaf = batch_new_leaves[j];
               
               std::vector<uint8_t> in_buf(kSonicBlockBytes, 0);
               size_t block_size = static_path_oram::BlockSize(val_len_);
