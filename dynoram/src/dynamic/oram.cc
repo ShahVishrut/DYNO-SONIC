@@ -10,6 +10,8 @@
 #include <algorithm>
 #include <chrono>
 #include <iostream>
+#include <thread>
+#include <vector>
 
 #include "src/utils/crypto.h"
 #include "sonic/obliv/ops/core_ops.hpp"
@@ -345,24 +347,43 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
       op.phys_k = 0;
   }
   
-  if (cap_S > 0) {
-      for (uint64_t i = 1; i <= cap_S; ++i) {
-          uint64_t log_k = log_map_[0][i];
-          for (auto& op : batch) {
-              bool match = (log_k != 0) && sn::obliv::ct_eq(static_cast<uint64_t>(op.key), log_k);
-              op.sub_oram_idx = sn::obliv::ct_select<int8_t>(0, op.sub_oram_idx, match);
-              op.phys_k = sn::obliv::ct_select<uint64_t>(i, op.phys_k, match);
-          }
-      }
-  }
+  int num_workers = 16;
   
-  if (cap_L > 0) {
-      for (uint64_t i = 1; i <= cap_L; ++i) {
-          uint64_t log_k = log_map_[1][i];
-          for (auto& op : batch) {
-              bool match = (log_k != 0) && sn::obliv::ct_eq(static_cast<uint64_t>(op.key), log_k);
-              op.sub_oram_idx = sn::obliv::ct_select<int8_t>(1, op.sub_oram_idx, match);
-              op.phys_k = sn::obliv::ct_select<uint64_t>(i, op.phys_k, match);
+  // We process sub_orams_[0] (idx=0) and sub_orams_[1] (idx=1) cleanly in a loop
+  for (int idx = 0; idx < 2; ++idx) {
+      uint64_t cap = (idx == 0) ? cap_S : cap_L;
+      if (cap > 0) {
+          std::vector<std::thread> workers;
+          // Thread-local arrays to prevent race conditions when writing to op.phys_k
+          std::vector<std::vector<int8_t>> tl_idx(num_workers, std::vector<int8_t>(B, -1));
+          std::vector<std::vector<uint64_t>> tl_phys_k(num_workers, std::vector<uint64_t>(B, 0));
+          
+          for (int w = 0; w < num_workers; ++w) {
+              workers.emplace_back([this, w, num_workers, cap, idx, B, &batch, &tl_idx, &tl_phys_k]() {
+                  for (uint64_t i = 1 + w; i <= cap; i += num_workers) {
+                      uint64_t log_k = log_map_[idx][i];
+                      for (size_t j = 0; j < B; ++j) {
+                          // FIX: Use bitwise '&' and ct_eq to prevent short-circuit branching!
+                          bool is_not_empty = !sn::obliv::ct_eq<uint64_t>(log_k, 0);
+                          bool is_key_match = sn::obliv::ct_eq<uint64_t>(static_cast<uint64_t>(batch[j].key), log_k);
+                          bool match = is_not_empty & is_key_match;
+                          
+                          tl_idx[w][j] = sn::obliv::ct_select<int8_t>(idx, tl_idx[w][j], match);
+                          tl_phys_k[w][j] = sn::obliv::ct_select<uint64_t>(i, tl_phys_k[w][j], match);
+                      }
+                  }
+              });
+          }
+          for (auto& worker : workers) worker.join();
+          
+          // Oblivious merge of the thread-local results back into the main batch
+          for (size_t j = 0; j < B; ++j) {
+              for (int w = 0; w < num_workers; ++w) {
+                  // FIX: Use ct_eq to prevent compiler branch optimization on !=
+                  bool match = !sn::obliv::ct_eq<int8_t>(tl_idx[w][j], -1);
+                  batch[j].sub_oram_idx = sn::obliv::ct_select<int8_t>(tl_idx[w][j], batch[j].sub_oram_idx, match);
+                  batch[j].phys_k = sn::obliv::ct_select<uint64_t>(tl_phys_k[w][j], batch[j].phys_k, match);
+              }
           }
       }
   }
