@@ -669,7 +669,7 @@ void SonicORamAdapter::InsertBatch(std::vector<static_path_oram::Block>& blocks,
   size_t B = blocks.size();
   
   if (all_new) {
-      size_t chunk_size = 512; // Periodic flush to prevent ZingORAM stash overflow
+      size_t chunk_size = 512; // Periodic flush to let SONIC garbage-collect dummies
       for (size_t chunk_start = 0; chunk_start < B; chunk_start += chunk_size) {
           size_t chunk_end = std::min(B, chunk_start + chunk_size);
           for (size_t j = chunk_start; j < chunk_end; ++j) {
@@ -698,8 +698,9 @@ void SonicORamAdapter::InsertBatch(std::vector<static_path_oram::Block>& blocks,
               sn::obliv::ct_select_array(in_buf.data(), in_buf.data(), zeros.data(), kSonicBlockBytes, real);
               
               sn::oram::tree::block<kSonicBlockBytes> new_block{};
-              new_block.address = sn::obliv::ct_select<uint64_t>(k - 1, UINT64_MAX, real);
-              new_block.leaf_ix = sn::obliv::ct_select<uint64_t>(leaf, 0, real);
+              // SONIC expects address = -1 for dummies. We cast -1 to match the uint64_t ct_select signature.
+              new_block.address = sn::obliv::ct_select<uint64_t>(k - 1, static_cast<uint64_t>(-1), real);
+              new_block.leaf_ix = sn::obliv::ct_select<uint64_t>(leaf, static_cast<uint64_t>(-1), real);
               std::copy(in_buf.begin(), in_buf.end(), new_block.data.begin());
               
               impl_->client->insert(new_block);
