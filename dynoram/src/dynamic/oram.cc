@@ -340,18 +340,14 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
 
   std::cout << "[DYNO] Phase 2: Pre-Phase LogMap Scan starting..." << std::endl;
   // Pre-Phase: Oblivious Routing via LogMap Scan
+  // MUST happen after bitonic sort because the hook only co-sorts .type/.key/.val,
+  // not .phys_k/.sub_oram_idx. Routing here ensures alignment with the sorted batch.
   for (auto& op : batch) {
       op.sub_oram_idx = -1;
       op.phys_k = 0;
   }
   
   int num_workers = 24;
-  
-  // 1. Flatten the keys array to perfectly align with L1 CPU Cache
-  std::vector<uint64_t> flat_keys(B);
-  for (size_t j = 0; j < B; ++j) {
-      flat_keys[j] = batch[j].key;
-  }
   
   // We process sub_orams_[0] (idx=0) and sub_orams_[1] (idx=1) cleanly in a loop
   for (int idx = 0; idx < 2; ++idx) {
@@ -363,18 +359,13 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
           std::vector<std::vector<uint64_t>> tl_phys_k(num_workers, std::vector<uint64_t>(B, 0));
           
           for (int w = 0; w < num_workers; ++w) {
-              workers.emplace_back([this, w, num_workers, cap, idx, B, &flat_keys, &tl_idx, &tl_phys_k]() {
-                  // 2. Hardware Prefetching Optimization: Give each thread a contiguous chunk of memory
-                  uint64_t chunk = (cap + num_workers) / num_workers;
-                  uint64_t pos_start = 1 + w * chunk;
-                  uint64_t pos_end = std::min(static_cast<uint64_t>(cap + 1), pos_start + chunk);
-                  
-                  for (uint64_t i = pos_start; i < pos_end; ++i) {
+              workers.emplace_back([this, w, num_workers, cap, idx, B, &batch, &tl_idx, &tl_phys_k]() {
+                  for (uint64_t i = 1 + w; i <= cap; i += num_workers) {
                       uint64_t log_k = log_map_[idx][i];
-                      bool is_not_empty = !sn::obliv::ct_eq<uint64_t>(log_k, 0);
-                      
                       for (size_t j = 0; j < B; ++j) {
-                          bool is_key_match = sn::obliv::ct_eq<uint64_t>(flat_keys[j], log_k);
+                          // FIX: Use bitwise '&' and ct_eq to prevent short-circuit branching!
+                          bool is_not_empty = !sn::obliv::ct_eq<uint64_t>(log_k, 0);
+                          bool is_key_match = sn::obliv::ct_eq<uint64_t>(static_cast<uint64_t>(batch[j].key), log_k);
                           bool match = is_not_empty & is_key_match;
                           
                           tl_idx[w][j] = sn::obliv::ct_select<int8_t>(idx, tl_idx[w][j], match);
@@ -388,6 +379,7 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
           // Oblivious merge of the thread-local results back into the main batch
           for (size_t j = 0; j < B; ++j) {
               for (int w = 0; w < num_workers; ++w) {
+                  // FIX: Use ct_eq to prevent compiler branch optimization on !=
                   bool match = !sn::obliv::ct_eq<int8_t>(tl_idx[w][j], -1);
                   batch[j].sub_oram_idx = sn::obliv::ct_select<int8_t>(tl_idx[w][j], batch[j].sub_oram_idx, match);
                   batch[j].phys_k = sn::obliv::ct_select<uint64_t>(tl_phys_k[w][j], batch[j].phys_k, match);
