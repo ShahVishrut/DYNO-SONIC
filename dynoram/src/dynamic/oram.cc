@@ -339,35 +339,36 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
   }
 
   std::cout << "[DYNO] Phase 2: Pre-Phase LogMap Scan starting..." << std::endl;
-  // Pre-Phase: Oblivious Routing via LogMap Scan
-  // MUST happen after bitonic sort because the hook only co-sorts .type/.key/.val,
-  // not .phys_k/.sub_oram_idx. Routing here ensures alignment with the sorted batch.
   for (auto& op : batch) {
       op.sub_oram_idx = -1;
       op.phys_k = 0;
   }
   
   int num_workers = 24;
+  std::vector<uint64_t> flat_keys(B);
+  for (size_t j = 0; j < B; ++j) {
+      flat_keys[j] = batch[j].key;
+  }
   
-  // We process sub_orams_[0] (idx=0) and sub_orams_[1] (idx=1) cleanly in a loop
   for (int idx = 0; idx < 2; ++idx) {
       uint64_t cap = (idx == 0) ? cap_S : cap_L;
       if (cap > 0) {
           std::vector<std::thread> workers;
-          // Thread-local arrays to prevent race conditions when writing to op.phys_k
           std::vector<std::vector<int8_t>> tl_idx(num_workers, std::vector<int8_t>(B, -1));
           std::vector<std::vector<uint64_t>> tl_phys_k(num_workers, std::vector<uint64_t>(B, 0));
           
           for (int w = 0; w < num_workers; ++w) {
-              workers.emplace_back([this, w, num_workers, cap, idx, B, &batch, &tl_idx, &tl_phys_k]() {
-                  for (uint64_t i = 1 + w; i <= cap; i += num_workers) {
+              workers.emplace_back([this, w, num_workers, cap, idx, B, &flat_keys, &tl_idx, &tl_phys_k]() {
+                  uint64_t chunk = (cap + num_workers) / num_workers;
+                  uint64_t pos_start = 1 + w * chunk;
+                  uint64_t pos_end = std::min(static_cast<uint64_t>(cap + 1), pos_start + chunk);
+                  
+                  for (uint64_t i = pos_start; i < pos_end; ++i) {
                       uint64_t log_k = log_map_[idx][i];
+                      bool is_not_empty = !sn::obliv::ct_eq<uint64_t>(log_k, 0);
                       for (size_t j = 0; j < B; ++j) {
-                          // FIX: Use bitwise '&' and ct_eq to prevent short-circuit branching!
-                          bool is_not_empty = !sn::obliv::ct_eq<uint64_t>(log_k, 0);
-                          bool is_key_match = sn::obliv::ct_eq<uint64_t>(static_cast<uint64_t>(batch[j].key), log_k);
+                          bool is_key_match = sn::obliv::ct_eq<uint64_t>(flat_keys[j], log_k);
                           bool match = is_not_empty & is_key_match;
-                          
                           tl_idx[w][j] = sn::obliv::ct_select<int8_t>(idx, tl_idx[w][j], match);
                           tl_phys_k[w][j] = sn::obliv::ct_select<uint64_t>(i, tl_phys_k[w][j], match);
                       }
@@ -376,10 +377,8 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
           }
           for (auto& worker : workers) worker.join();
           
-          // Oblivious merge of the thread-local results back into the main batch
           for (size_t j = 0; j < B; ++j) {
               for (int w = 0; w < num_workers; ++w) {
-                  // FIX: Use ct_eq to prevent compiler branch optimization on !=
                   bool match = !sn::obliv::ct_eq<int8_t>(tl_idx[w][j], -1);
                   batch[j].sub_oram_idx = sn::obliv::ct_select<int8_t>(tl_idx[w][j], batch[j].sub_oram_idx, match);
                   batch[j].phys_k = sn::obliv::ct_select<uint64_t>(tl_phys_k[w][j], batch[j].phys_k, match);
@@ -499,24 +498,66 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
     real_DL += sn::obliv::ct_select<size_t>(1, 0, is_real && is_delete && (idx == 1));
   }
 
-  // Allocate empty slots for REAL Inserts in S_large
+  // Allocate empty slots for REAL Inserts in S_large (Fully Parallelized)
+  std::vector<uint64_t> flat_ins_keys(B);
+  std::vector<bool> flat_needs_slot(B);
   for (size_t i = 0; i < B; ++i) {
-      uint32_t orig_idx = elems[i].seq;
-      bool is_real = !elems[i].is_dummy;
-      bool is_insert = sn::obliv::ct_eq(elems[i].op_type, static_cast<uint8_t>(OpType::Insert));
-      bool needs_slot = is_real && is_insert;
-      
-      uint64_t assigned_slot = 0;
-      for (uint64_t j = 1; j <= cap_L; ++j) {
-          bool is_empty = (log_map_[1][j] == 0);
-          bool select_this = is_empty && (assigned_slot == 0) && needs_slot;
-          assigned_slot = sn::obliv::ct_select<uint64_t>(j, assigned_slot, select_this);
-          log_map_[1][j] = sn::obliv::ct_select<uint64_t>(elems[i].key, log_map_[1][j], select_this);
-      }
-      
-      batch[orig_idx].sub_oram_idx = sn::obliv::ct_select<int8_t>(1, batch[orig_idx].sub_oram_idx, needs_slot);
-      batch[orig_idx].phys_k = sn::obliv::ct_select<uint64_t>(assigned_slot, batch[orig_idx].phys_k, needs_slot);
+      flat_ins_keys[i] = elems[i].key;
+      flat_needs_slot[i] = !elems[i].is_dummy && sn::obliv::ct_eq(elems[i].op_type, static_cast<uint8_t>(OpType::Insert));
   }
+
+  std::vector<std::vector<uint64_t>> tl_assigned(num_workers, std::vector<uint64_t>(B, 0));
+  std::vector<std::thread> workers_p3;
+
+  for (int w = 0; w < num_workers; ++w) {
+      workers_p3.emplace_back([&, w]() {
+          uint64_t chunk = (cap_L + num_workers) / num_workers;
+          uint64_t pos_start = 1 + w * chunk;
+          uint64_t pos_end = std::min(static_cast<uint64_t>(cap_L + 1), pos_start + chunk);
+          
+          for (uint64_t j = pos_start; j < pos_end; ++j) {
+              bool is_empty = (log_map_[1][j] == 0);
+              for (size_t i = 0; i < B; ++i) {
+                  bool needs = flat_needs_slot[i] & sn::obliv::ct_eq<uint64_t>(tl_assigned[w][i], 0);
+                  bool select_this = is_empty & needs;
+                  tl_assigned[w][i] = sn::obliv::ct_select<uint64_t>(j, tl_assigned[w][i], select_this);
+                  is_empty = sn::obliv::ct_select(false, is_empty, select_this);
+              }
+          }
+      });
+  }
+  for (auto& w : workers_p3) w.join(); workers_p3.clear();
+
+  std::vector<uint64_t> global_assigned(B, 0);
+  for (size_t i = 0; i < B; ++i) {
+      for (int w = 0; w < num_workers; ++w) {
+          bool needs = (global_assigned[i] == 0);
+          bool has = (tl_assigned[w][i] != 0);
+          global_assigned[i] = sn::obliv::ct_select<uint64_t>(tl_assigned[w][i], global_assigned[i], needs & has);
+      }
+      uint32_t orig_idx = elems[i].seq;
+      batch[orig_idx].sub_oram_idx = sn::obliv::ct_select<int8_t>(1, batch[orig_idx].sub_oram_idx, flat_needs_slot[i]);
+      batch[orig_idx].phys_k = sn::obliv::ct_select<uint64_t>(global_assigned[i], batch[orig_idx].phys_k, flat_needs_slot[i]);
+  }
+
+  // Parallel Writeback
+  for (int w = 0; w < num_workers; ++w) {
+      workers_p3.emplace_back([&, w]() {
+          uint64_t chunk = (cap_L + num_workers) / num_workers;
+          uint64_t pos_start = 1 + w * chunk;
+          uint64_t pos_end = std::min(static_cast<uint64_t>(cap_L + 1), pos_start + chunk);
+          
+          for (uint64_t j = pos_start; j < pos_end; ++j) {
+              uint64_t final_key = log_map_[1][j];
+              for (size_t i = 0; i < B; ++i) {
+                  bool match = flat_needs_slot[i] & sn::obliv::ct_eq<uint64_t>(j, global_assigned[i]);
+                  final_key = sn::obliv::ct_select<uint64_t>(flat_ins_keys[i], final_key, match);
+              }
+              log_map_[1][j] = final_key;
+          }
+      });
+  }
+  for (auto& w : workers_p3) w.join();
 
   std::cout << "[DYNO] Phase 4: O-Sort (Group by OpType) starting..." << std::endl;
   // Phase 3: O-Sort (Group by OpType)
@@ -718,6 +759,91 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
     T = std::max(std::abs(static_cast<int64_t>(original_deletes) - a), std::abs(a));
   }
 
+  // ==================================================================================
+  // GENERIC PARALLEL TRANSFER HELPER (Cures O(N^2) scale-up deadlocks)
+  // ==================================================================================
+  auto parallel_transfer_update = [&](int from_idx, int to_idx, std::vector<static_path_oram::Block>& buffer, bool transfer_cond, size_t count, uint64_t cap_from, uint64_t cap_to) {
+      if (count == 0) return;
+      int num_workers = 24;
+      
+      // 1. Parallel Extract LogK and Clear From Map
+      std::vector<std::vector<uint64_t>> tl_log_k(num_workers, std::vector<uint64_t>(count, 0));
+      std::vector<std::thread> workers;
+      for (int w = 0; w < num_workers; ++w) {
+          workers.emplace_back([&, w]() {
+              uint64_t chunk = (cap_from + num_workers) / num_workers;
+              uint64_t start = 1 + w * chunk;
+              uint64_t end = std::min(cap_from + 1, start + chunk);
+              for (uint64_t j = start; j < end; ++j) {
+                  uint64_t map_val = log_map_[from_idx][j];
+                  for (size_t i = 0; i < count; ++i) {
+                      bool is_valid = transfer_cond && (buffer[i].meta_.key_ != 0);
+                      bool match = is_valid && sn::obliv::ct_eq(j, buffer[i].meta_.key_);
+                      tl_log_k[w][i] = sn::obliv::ct_select(map_val, tl_log_k[w][i], match);
+                      map_val = sn::obliv::ct_select<uint64_t>(0, map_val, match);
+                  }
+                  log_map_[from_idx][j] = map_val;
+              }
+          });
+      }
+      for (auto& w : workers) w.join(); workers.clear();
+      
+      std::vector<uint64_t> global_log_k(count, 0);
+      for (size_t i = 0; i < count; ++i) {
+          for (int w = 0; w < num_workers; ++w) global_log_k[i] |= tl_log_k[w][i];
+      }
+      
+      // 2. Parallel Propose Empty Slots in To Map
+      std::vector<std::vector<uint64_t>> tl_assigned(num_workers, std::vector<uint64_t>(count, 0));
+      for (int w = 0; w < num_workers; ++w) {
+          workers.emplace_back([&, w]() {
+              uint64_t chunk = (cap_to + num_workers) / num_workers;
+              uint64_t start = 1 + w * chunk;
+              uint64_t end = std::min(cap_to + 1, start + chunk);
+              for (uint64_t j = start; j < end; ++j) {
+                  bool is_empty = (log_map_[to_idx][j] == 0);
+                  for (size_t i = 0; i < count; ++i) {
+                      bool is_valid = transfer_cond && (buffer[i].meta_.key_ != 0);
+                      bool needs = is_valid & sn::obliv::ct_eq<uint64_t>(tl_assigned[w][i], 0);
+                      bool select = is_empty & needs;
+                      tl_assigned[w][i] = sn::obliv::ct_select(j, tl_assigned[w][i], select);
+                      is_empty = sn::obliv::ct_select(false, is_empty, select);
+                  }
+              }
+          });
+      }
+      for (auto& w : workers) w.join(); workers.clear();
+      
+      std::vector<uint64_t> global_assigned(count, 0);
+      for (size_t i = 0; i < count; ++i) {
+          for (int w = 0; w < num_workers; ++w) {
+              bool needs = (global_assigned[i] == 0);
+              bool has = (tl_assigned[w][i] != 0);
+              global_assigned[i] = sn::obliv::ct_select(tl_assigned[w][i], global_assigned[i], needs & has);
+          }
+          bool is_valid = transfer_cond && (buffer[i].meta_.key_ != 0);
+          buffer[i].meta_.key_ = sn::obliv::ct_select(global_assigned[i], static_cast<uint64_t>(0), is_valid);
+      }
+      
+      // 3. Parallel Writeback
+      for (int w = 0; w < num_workers; ++w) {
+          workers.emplace_back([&, w]() {
+              uint64_t chunk = (cap_to + num_workers) / num_workers;
+              uint64_t start = 1 + w * chunk;
+              uint64_t end = std::min(cap_to + 1, start + chunk);
+              for (uint64_t j = start; j < end; ++j) {
+                  uint64_t final_key = log_map_[to_idx][j];
+                  for (size_t i = 0; i < count; ++i) {
+                      bool match = transfer_cond && sn::obliv::ct_eq(j, global_assigned[i]) && !sn::obliv::ct_eq<uint64_t>(global_assigned[i], 0);
+                      final_key = sn::obliv::ct_select(global_log_k[i], final_key, match);
+                  }
+                  log_map_[to_idx][j] = final_key;
+              }
+          });
+      }
+      for (auto& w : workers) w.join();
+  };
+
   // Phase 4: Exact Transfer via LogMap
   if (sub_orams_[0] && sub_orams_[1] && T > 0) {
     int64_t T_pow2 = 1;
@@ -752,41 +878,8 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
         }
     }
 
-    for (int64_t i = 0; i < T; ++i) {
-        uint64_t old_phys_k_0 = Buffer_0[i].meta_.key_;
-        bool is_valid_0 = transfer_up && (old_phys_k_0 != 0);
-        uint64_t log_k_0 = 0;
-        for (uint64_t j = 1; j <= cap_S; ++j) {
-            bool match = is_valid_0 && sn::obliv::ct_eq(j, old_phys_k_0);
-            log_k_0 = sn::obliv::ct_select(log_map_[0][j], log_k_0, match);
-            log_map_[0][j] = sn::obliv::ct_select<uint64_t>(0, log_map_[0][j], match);
-        }
-        uint64_t new_phys_k_0 = 0;
-        for (uint64_t j = 1; j <= cap_L; ++j) {
-            bool is_empty = (log_map_[1][j] == 0);
-            bool select_this = is_valid_0 && is_empty && (new_phys_k_0 == 0);
-            new_phys_k_0 = sn::obliv::ct_select(j, new_phys_k_0, select_this);
-            log_map_[1][j] = sn::obliv::ct_select(log_k_0, log_map_[1][j], select_this);
-        }
-        Buffer_0[i].meta_.key_ = sn::obliv::ct_select(new_phys_k_0, static_cast<uint64_t>(0), is_valid_0);
-
-        uint64_t old_phys_k_1 = Buffer_1[i].meta_.key_;
-        bool is_valid_1 = transfer_down && (old_phys_k_1 != 0);
-        uint64_t log_k_1 = 0;
-        for (uint64_t j = 1; j <= cap_L; ++j) {
-            bool match = is_valid_1 && sn::obliv::ct_eq(j, old_phys_k_1);
-            log_k_1 = sn::obliv::ct_select(log_map_[1][j], log_k_1, match);
-            log_map_[1][j] = sn::obliv::ct_select<uint64_t>(0, log_map_[1][j], match);
-        }
-        uint64_t new_phys_k_1 = 0;
-        for (uint64_t j = 1; j <= cap_S; ++j) {
-            bool is_empty = (log_map_[0][j] == 0);
-            bool select_this = is_valid_1 && is_empty && (new_phys_k_1 == 0);
-            new_phys_k_1 = sn::obliv::ct_select(j, new_phys_k_1, select_this);
-            log_map_[0][j] = sn::obliv::ct_select(log_k_1, log_map_[0][j], select_this);
-        }
-        Buffer_1[i].meta_.key_ = sn::obliv::ct_select(new_phys_k_1, static_cast<uint64_t>(0), is_valid_1);
-    }
+    parallel_transfer_update(0, 1, Buffer_0, transfer_up, T, cap_S, cap_L);
+    parallel_transfer_update(1, 0, Buffer_1, transfer_down, T, cap_L, cap_S);
 
     sub_orams_[1]->InsertBatch(Buffer_0, enc_key, true, true);
     sub_orams_[0]->InsertBatch(Buffer_1, enc_key, true, true);
@@ -818,27 +911,7 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
         
         std::vector<static_path_oram::Block> Buffer = sub_orams_[0]->ReadAndRemoveBatch(keys_to_read, enc_key);
         
-        for (int64_t i = 0; i < k_sec; ++i) {
-            uint64_t old_phys_k = Buffer[i].meta_.key_;
-            bool is_valid = (old_phys_k != 0);
-            
-            uint64_t log_k = 0;
-            for (uint64_t j = 1; j <= static_cast<uint64_t>(old_y); ++j) {
-                bool match = is_valid && sn::obliv::ct_eq(j, old_phys_k);
-                log_k = sn::obliv::ct_select(log_map_[0][j], log_k, match);
-                log_map_[0][j] = sn::obliv::ct_select<uint64_t>(0, log_map_[0][j], match);
-            }
-            
-            uint64_t new_phys_k = 0;
-            for (uint64_t j = 1; j <= static_cast<uint64_t>(2 * old_y); ++j) {
-                bool is_empty = (log_map_[1][j] == 0);
-                bool select_this = is_valid && is_empty && (new_phys_k == 0);
-                new_phys_k = sn::obliv::ct_select(j, new_phys_k, select_this);
-                log_map_[1][j] = sn::obliv::ct_select(log_k, log_map_[1][j], select_this);
-            }
-            
-            Buffer[i].meta_.key_ = new_phys_k;
-        }
+        parallel_transfer_update(0, 1, Buffer, true, k_sec, old_y, 2 * old_y);
         sub_orams_[1]->InsertBatch(Buffer, enc_key, true, true); // all_new = true
     }
   } else if (scale_down) {
@@ -864,27 +937,7 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
         
         std::vector<static_path_oram::Block> Buffer = sub_orams_[1]->ReadAndRemoveBatch(keys_to_read, enc_key);
         
-        for (int64_t i = 0; i < k_sec; ++i) {
-            uint64_t old_phys_k = Buffer[i].meta_.key_;
-            bool is_valid = (old_phys_k != 0);
-            
-            uint64_t log_k = 0;
-            for (uint64_t j = 1; j <= static_cast<uint64_t>(old_x); ++j) {
-                bool match = is_valid && sn::obliv::ct_eq(j, old_phys_k);
-                log_k = sn::obliv::ct_select(log_map_[1][j], log_k, match);
-                log_map_[1][j] = sn::obliv::ct_select<uint64_t>(0, log_map_[1][j], match);
-            }
-            
-            uint64_t new_phys_k = 0;
-            for (uint64_t j = 1; j <= static_cast<uint64_t>(old_x / 2); ++j) {
-                bool is_empty = (log_map_[0][j] == 0);
-                bool select_this = is_valid && is_empty && (new_phys_k == 0);
-                new_phys_k = sn::obliv::ct_select(j, new_phys_k, select_this);
-                log_map_[0][j] = sn::obliv::ct_select(log_k, log_map_[0][j], select_this);
-            }
-            
-            Buffer[i].meta_.key_ = new_phys_k;
-        }
+        parallel_transfer_update(1, 0, Buffer, true, k_sec, old_x, old_x / 2);
         sub_orams_[0]->InsertBatch(Buffer, enc_key, true, true);
     }
   }
