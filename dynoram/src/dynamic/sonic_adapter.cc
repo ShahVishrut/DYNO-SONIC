@@ -413,7 +413,7 @@ std::vector<static_path_oram::Block> SonicORamAdapter::ReadAndRemoveBatch(const 
   std::call_once(g_pool_init_flag, [](){ g_access_pool = std::make_unique<ThreadPool>(24); });
 
   std::vector<uint64_t> thread_access_ops(num_workers, 0);
-  size_t chunk_size = 1536;
+  size_t chunk_size = 768;
   std::mutex ops_mutex;
   std::condition_variable chunk_cv;
 
@@ -604,7 +604,7 @@ std::vector<static_path_oram::Block> SonicORamAdapter::ReadBatch(const std::vect
   std::call_once(g_pool_init_flag, [](){ g_access_pool = std::make_unique<ThreadPool>(24); });
 
   std::vector<uint64_t> thread_access_ops(num_workers, 0);
-  size_t chunk_size = 1536; // 3. Increased chunk size 
+  size_t chunk_size = 768; // 3. Increased chunk size 
   std::mutex ops_mutex;
   std::condition_variable chunk_cv;
 
@@ -614,7 +614,7 @@ std::vector<static_path_oram::Block> SonicORamAdapter::ReadBatch(const std::vect
       
       for (int i = 0; i < num_workers; ++i) {
           // Fixed the print statement typo
-          if (chunk_start % 15360 == 0 && i == 0) std::cout << "    ... ReadBatch processing chunk " << chunk_start << " / " << B << std::endl;
+          if (chunk_start % 7680 == 0 && i == 0) std::cout << "    ... ReadBatch processing chunk " << chunk_start << " / " << B << std::endl;
           
           g_access_pool->enqueue([this, i, num_workers, chunk_start, chunk_end, &ops, &batch_cur_leaves, &batch_new_leaves, &results, &thread_access_ops, &ops_mutex, &tasks_pending, &chunk_cv]() {
               try {
@@ -763,7 +763,7 @@ void SonicORamAdapter::InsertBatch(std::vector<static_path_oram::Block>& blocks,
 
       // 3. Chunked Stash Insertion
       // Increased chunk size to take advantage of larger disjoint epoch window
-      size_t chunk_size = 1536; 
+      size_t chunk_size = 768; 
       for (size_t chunk_start = 0; chunk_start < B; chunk_start += chunk_size) {
           size_t chunk_end = std::min(B, chunk_start + chunk_size);
           for (size_t j = chunk_start; j < chunk_end; ++j) {
