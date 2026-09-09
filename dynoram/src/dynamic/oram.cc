@@ -526,7 +526,8 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
           }
       });
   }
-  for (auto& w : workers_p3) w.join(); workers_p3.clear();
+  for (auto& w : workers_p3) w.join(); 
+  workers_p3.clear();
 
   std::vector<uint64_t> global_assigned(B, 0);
   for (size_t i = 0; i < B; ++i) {
@@ -778,7 +779,8 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
                   uint64_t map_val = log_map_[from_idx][j];
                   for (size_t i = 0; i < count; ++i) {
                       bool is_valid = transfer_cond && (buffer[i].meta_.key_ != 0);
-                      bool match = is_valid && sn::obliv::ct_eq(j, buffer[i].meta_.key_);
+                      // FIXED: Explicitly cast the comparison to uint64_t
+                      bool match = is_valid && sn::obliv::ct_eq<uint64_t>(j, buffer[i].meta_.key_);
                       tl_log_k[w][i] = sn::obliv::ct_select(map_val, tl_log_k[w][i], match);
                       map_val = sn::obliv::ct_select<uint64_t>(0, map_val, match);
                   }
@@ -786,7 +788,8 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
               }
           });
       }
-      for (auto& w : workers) w.join(); workers.clear();
+      for (auto& w : workers) w.join(); 
+      workers.clear(); // FIXED: Warning cleared
       
       std::vector<uint64_t> global_log_k(count, 0);
       for (size_t i = 0; i < count; ++i) {
@@ -812,7 +815,8 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
               }
           });
       }
-      for (auto& w : workers) w.join(); workers.clear();
+      for (auto& w : workers) w.join(); 
+      workers.clear(); // FIXED: Warning cleared
       
       std::vector<uint64_t> global_assigned(count, 0);
       for (size_t i = 0; i < count; ++i) {
@@ -834,7 +838,7 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
               for (uint64_t j = start; j < end; ++j) {
                   uint64_t final_key = log_map_[to_idx][j];
                   for (size_t i = 0; i < count; ++i) {
-                      bool match = transfer_cond && sn::obliv::ct_eq(j, global_assigned[i]) && !sn::obliv::ct_eq<uint64_t>(global_assigned[i], 0);
+                      bool match = transfer_cond && sn::obliv::ct_eq<uint64_t>(j, global_assigned[i]) && !sn::obliv::ct_eq<uint64_t>(global_assigned[i], 0);
                       final_key = sn::obliv::ct_select(global_log_k[i], final_key, match);
                   }
                   log_map_[to_idx][j] = final_key;
