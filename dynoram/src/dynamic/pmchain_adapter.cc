@@ -23,10 +23,10 @@ struct PMChainAdapter::Impl {
     Impl(size_t capacity, size_t max_batch_size) {
         thread_ctx.bind_current_thread();
         
-        eviction_pool = std::make_unique<sn::threads::pthread_thread_pool>(thread_ctx, 0, "pmchain-evict");
+        eviction_pool = std::make_unique<sn::threads::pthread_thread_pool>(thread_ctx, 16, "pmchain-evict");
         eviction_team = std::make_unique<sn::threads::thread_team>(eviction_pool->pool(), 16); 
 
-        access_pool = std::make_unique<sn::threads::pthread_thread_pool>(thread_ctx, 0, "pmchain-access");
+        access_pool = std::make_unique<sn::threads::pthread_thread_pool>(thread_ctx, 24, "pmchain-access");
         access_team = std::make_unique<sn::threads::thread_team>(access_pool->pool(), 24); 
 
         sn::omap::suboram::pmchain::config cfg{};
