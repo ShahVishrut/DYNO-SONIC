@@ -23,11 +23,11 @@ struct PMChainAdapter::Impl {
     Impl(size_t capacity, size_t max_batch_size) {
         thread_ctx.bind_current_thread();
         
-        eviction_pool = std::make_unique<sn::threads::pthread_thread_pool>(thread_ctx, 32, "pmchain-evict");
-        eviction_team = std::make_unique<sn::threads::thread_team>(eviction_pool->pool(), 32); 
+        eviction_pool = std::make_unique<sn::threads::pthread_thread_pool>(thread_ctx, 8, "pmchain-evict");
+        eviction_team = std::make_unique<sn::threads::thread_team>(eviction_pool->pool(), 8); 
 
-        access_pool = std::make_unique<sn::threads::pthread_thread_pool>(thread_ctx, 32, "pmchain-access");
-        access_team = std::make_unique<sn::threads::thread_team>(access_pool->pool(), 32); 
+        access_pool = std::make_unique<sn::threads::pthread_thread_pool>(thread_ctx, 8, "pmchain-access");
+        access_team = std::make_unique<sn::threads::thread_team>(access_pool->pool(), 8); 
 
         sn::omap::suboram::pmchain::config cfg{};
         cfg.block_count = capacity;
@@ -35,10 +35,9 @@ struct PMChainAdapter::Impl {
         cfg.bucket_real_size = 16;
         cfg.bucket_dummy_size = 16;
         cfg.eviction_rate = 2;
-        cfg.routing_depth = 5; // 2^5 = 32 subtrees
+        cfg.routing_depth = 3;
         cfg.evict_batch = 2;
-        cfg.access_concurrency = 32;
-        cfg.cache_memory_budget_bytes = 1024ULL * 1024ULL * 1024ULL; // 1 GB cache
+        cfg.access_concurrency = 8;
         cfg.posmap_bucket_size = 64; 
 
         driver = std::make_unique<PMDriver>(cfg, std::move(*eviction_team), std::move(*access_team));
@@ -60,10 +59,11 @@ double PMChainAdapter::SpinlockSonicBenchmark(int work_type, size_t batch_size, 
         std::terminate();
     }
 
-    std::vector<Impl::PMDriver::operation> ops(max_batch_size_);
+    const size_t aligned_batch_size = impl_->driver->chain_.config().batch_size;
+    std::vector<Impl::PMDriver::operation> ops(aligned_batch_size);
     std::mt19937_64 rng(1337);
 
-    for (size_t i = 0; i < max_batch_size_; ++i) {
+    for (size_t i = 0; i < aligned_batch_size; ++i) {
         auto& op = ops[i];
         
         if (i < batch_size) { 
