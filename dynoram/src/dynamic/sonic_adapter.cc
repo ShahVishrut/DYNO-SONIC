@@ -92,9 +92,9 @@ struct SonicORamAdapter::Impl {
   Impl(size_t capacity, bool w_pos_map) : with_pos_map(w_pos_map) {
     thread_ctx.bind_current_thread();
     
-    // Create 16 eviction threads to handle the massive forest parallelism
-    eviction_pool = std::make_unique<sn::threads::pthread_thread_pool>(thread_ctx, 0, "oram-evict");
-    eviction_team = std::make_unique<sn::threads::thread_team>(eviction_pool->pool(), 16);
+    // Create 8 eviction threads to handle the massive forest parallelism
+    eviction_pool = std::make_unique<sn::threads::pthread_thread_pool>(thread_ctx, 8, "oram-evict");
+    eviction_team = std::make_unique<sn::threads::thread_team>(eviction_pool->pool(), 8);
 
     SonicTraits::options_t opts{};
     opts.block_count = capacity + 1;
@@ -103,7 +103,7 @@ struct SonicORamAdapter::Impl {
     opts.eviction_rate = 2; 
     opts.routing_depth = 3; 
     opts.evict_batch = 2; 
-    opts.access_concurrency = 24;
+    opts.access_concurrency = 32;
     opts.disjoint_epoch_window = 1024;
 
     client = std::make_unique<SonicClient>(opts, std::move(*eviction_team));
