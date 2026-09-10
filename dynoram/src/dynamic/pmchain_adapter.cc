@@ -95,12 +95,9 @@ double PMChainAdapter::SpinlockSonicBenchmark(int work_type, size_t batch_size, 
     impl_->driver->chain_.sort_o2th_chains();
     impl_->driver->chain_.execute_oram_queries();
 
-    auto end_burst = std::chrono::high_resolution_clock::now();
-
     impl_->driver->chain_.flush_pending();
 
-    auto end_steady = std::chrono::high_resolution_clock::now();
-    auto end = steady_state ? end_steady : end_burst;
+    auto end = std::chrono::high_resolution_clock::now();
     
     return std::chrono::duration<double, std::milli>(end - start).count();
 }
