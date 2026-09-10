@@ -23,11 +23,11 @@ struct PMChainAdapter::Impl {
     Impl(size_t capacity, size_t max_batch_size) {
         thread_ctx.bind_current_thread();
         
-        eviction_pool = std::make_unique<sn::threads::pthread_thread_pool>(thread_ctx, 40, "pmchain-evict");
-        eviction_team = std::make_unique<sn::threads::thread_team>(eviction_pool->pool(), 40); 
+        eviction_pool = std::make_unique<sn::threads::pthread_thread_pool>(thread_ctx, 32, "pmchain-evict");
+        eviction_team = std::make_unique<sn::threads::thread_team>(eviction_pool->pool(), 32); 
 
-        access_pool = std::make_unique<sn::threads::pthread_thread_pool>(thread_ctx, 40, "pmchain-access");
-        access_team = std::make_unique<sn::threads::thread_team>(access_pool->pool(), 40); 
+        access_pool = std::make_unique<sn::threads::pthread_thread_pool>(thread_ctx, 32, "pmchain-access");
+        access_team = std::make_unique<sn::threads::thread_team>(access_pool->pool(), 32); 
 
         sn::omap::suboram::pmchain::config cfg{};
         cfg.block_count = capacity;
@@ -35,9 +35,9 @@ struct PMChainAdapter::Impl {
         cfg.bucket_real_size = 16;
         cfg.bucket_dummy_size = 16;
         cfg.eviction_rate = 2;
-        cfg.routing_depth = 3;
+        cfg.routing_depth = 5; // 2^5 = 32 subtrees
         cfg.evict_batch = 2;
-        cfg.access_concurrency = 40;
+        cfg.access_concurrency = 32;
         cfg.cache_memory_budget_bytes = 1024ULL * 1024ULL * 1024ULL; // 1 GB cache
         cfg.posmap_bucket_size = 64; 
 
