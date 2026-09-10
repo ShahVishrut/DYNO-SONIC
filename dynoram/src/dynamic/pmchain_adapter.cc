@@ -45,7 +45,7 @@ struct PMChainAdapter::Impl {
 };
 
 PMChainAdapter::PMChainAdapter(size_t capacity, size_t val_len, size_t max_batch_size)
-    : capacity_(capacity), val_len_(val_len), max_batch_size_(max_batch_size), impl_(std::make_unique<Impl>(capacity, max_batch_size)) {}
+    : capacity_(capacity), val_len_(val_len), max_batch_size_(((max_batch_size + 63) / 64) * 64), impl_(std::make_unique<Impl>(capacity, max_batch_size_)) {}
 
 PMChainAdapter::~PMChainAdapter() = default;
 
