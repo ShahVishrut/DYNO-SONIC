@@ -23,7 +23,7 @@ void MeasurePlainSonicThroughput(double target_sla_ms) {
         std::cout << test_name << "\n";
         std::cout << "=============================================\n";
 
-        size_t batch_size = 10000; // Start size smaller
+        size_t batch_size = 100000; // Start size
         double last_ms = 0;
         size_t last_batch_size = 0;
 
