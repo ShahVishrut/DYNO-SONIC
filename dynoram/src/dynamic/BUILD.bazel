@@ -2,8 +2,8 @@ COPTS = ["-std=c++20", "-masm=intel"]
 
 cc_library(
     name = "oram",
-    srcs = ["oram.cc", "sonic_adapter.cc"],
-    hdrs = ["oram.h", "sonic_adapter.h"],
+    srcs = ["oram.cc", "sonic_adapter.cc", "pmchain_adapter.cc"],
+    hdrs = ["oram.h", "sonic_adapter.h", "pmchain_adapter.h"],
     deps = [
         "//src/static:oram",
         "@sonic//:sonic",

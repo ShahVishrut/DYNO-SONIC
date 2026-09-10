@@ -1,7 +1,7 @@
 #include <iostream>
 #include <iomanip>
 #include <string>
-#include "src/dynamic/sonic_adapter.h"
+#include "src/dynamic/pmchain_adapter.h"
 
 using namespace dyno::dynamic_stepping_path_oram;
 
@@ -15,12 +15,12 @@ void MeasurePlainSonicThroughput(double target_sla_ms) {
     // Wait, SonicORamAdapter's constructor uses crypto, so we might need OpenSSL.
     
     // Create the adapter with 2^24 elements (same as throughput_bench.cc).
-    size_t capacity = 1ULL << 24;
-    SonicORamAdapter adapter(capacity, 16, true);
+    size_t capacity = 1ULL << 23;
+    PMChainAdapter adapter(capacity, 56, 100000);
 
     // Warmup / Insert some blocks to make the pos_map lookups realistic.
     std::cout << "Initializing ORAM to a baseline state...\n";
-    size_t init_batch_size = 200000;
+    size_t init_batch_size = 100000;
     adapter.SpinlockSonicBenchmark(0, init_batch_size, false);
     std::cout << "Initialization complete. Running tests...\n\n";
 
@@ -30,7 +30,7 @@ void MeasurePlainSonicThroughput(double target_sla_ms) {
         std::cout << test_name << "\n";
         std::cout << "=============================================\n";
 
-        size_t batch_size = 131072; // Start size
+        size_t batch_size = 100000; // Start size
         double last_ms = 0;
         size_t last_batch_size = 0;
 

@@ -288,6 +288,7 @@ private:
     }
   }
 
+public:
   config cfg_{};
   posmap_type posmap_;
   backing_oram_type backing_oram_;

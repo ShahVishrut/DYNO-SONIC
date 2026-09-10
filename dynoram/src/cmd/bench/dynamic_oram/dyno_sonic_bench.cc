@@ -41,12 +41,12 @@ void RunDynoWorkload(ORam& oram, dyno::crypto::Key enc_key, const std::string& t
             op.type = ORam::OpType::Search;
         } else if (type_to_use == 1) {
             op.type = ORam::OpType::Update;
-            op.val = std::make_unique<uint8_t[]>(16); // Assuming val_len = 16
-            std::memset(op.val.get(), 1, 16);
+            op.val = std::make_unique<uint8_t[]>(56); // Assuming val_len = 56
+            std::memset(op.val.get(), 1, 56);
         } else if (type_to_use == 2) {
             op.type = ORam::OpType::Insert;
-            op.val = std::make_unique<uint8_t[]>(16);
-            std::memset(op.val.get(), 2, 16);
+            op.val = std::make_unique<uint8_t[]>(56);
+            std::memset(op.val.get(), 2, 56);
         } else if (type_to_use == 3) {
             op.type = ORam::OpType::Delete;
         }
@@ -79,7 +79,7 @@ void TestDynoContinuousScaling(dyno::crypto::Key enc_key, size_t batch_size) {
         start_pow2++;
     }
     
-    ORam scaling_oram(start_pow2, 16); 
+    ORam scaling_oram(start_pow2, 56); 
     std::mt19937 rng(42);
     
     // We will run 16 batches.
@@ -107,7 +107,7 @@ void TestDynoContinuousScaling(dyno::crypto::Key enc_key, size_t batch_size) {
             if (growing_phase) {
                 if (r < 90) {
                     op.type = ORam::OpType::Insert;
-                    op.val = std::make_unique<uint8_t[]>(16);
+                    op.val = std::make_unique<uint8_t[]>(56);
                 } else {
                     op.type = ORam::OpType::Search;
                 }
@@ -145,7 +145,7 @@ int main(int argc, char** argv) {
     std::cout << "Starting DYNO+SONIC benchmark\n";
     
     auto enc_key = dyno::crypto::GenerateKey();
-    ORam oram(22, 16); // 2^22 capacity, 16 byte val_len (Lowered to fit in RAM)
+    ORam oram(23, 56); // 2^23 capacity, 56 byte val_len
     
     std::cout << "Initializing ORAM to a baseline state with dummy operations...\n";
     std::vector<ORam::BatchOperation> init_batch;
@@ -153,8 +153,8 @@ int main(int argc, char** argv) {
         ORam::BatchOperation op;
         op.type = ORam::OpType::Insert;
         op.key = (i % oram.Capacity()) + 1;
-        op.val = std::make_unique<uint8_t[]>(16);
-        std::memset(op.val.get(), 0, 16);
+        op.val = std::make_unique<uint8_t[]>(56);
+        std::memset(op.val.get(), 0, 56);
         init_batch.push_back(std::move(op));
     }
     oram.ExecuteBatch(init_batch, enc_key);

@@ -8,6 +8,7 @@
 
 #include "src/dynamic/oram.h"
 #include "src/utils/crypto.h"
+#include "src/dynamic/pmchain_adapter.h"
 
 using namespace dyno::crypto;
 using namespace dyno::dynamic_stepping_path_oram;
@@ -18,13 +19,11 @@ struct BenchmarkResult {
     double throughput_ops_sec;
 };
 
-
-BenchmarkResult MeasureSonicThroughput(
-    SonicORamAdapter* sonic, 
-    dyno::crypto::Key enc_key,
-    int work_type, // 0: Insert, 1: Search, 2: Delete, 3: Mixed
+BenchmarkResult MeasurePMChainThroughput(
+    PMChainAdapter* sonic, 
+    int work_type, 
     double target_sla_ms,
-    int raw_sonic_mode = 0 // 0: None, 1: Polite, 2: Spinlock
+    int raw_sonic_mode = 0 
 ) {
     size_t low = 1;
     size_t high;
@@ -34,51 +33,15 @@ BenchmarkResult MeasureSonicThroughput(
     size_t best_batch = 1;
     double best_latency = 0;
 
-    std::mt19937_64 rng(1337);
-
     while (low <= high) {
         size_t mid = low + (high - low) / 2;
         std::cout << "    ... Testing batch size: " << mid << std::flush;
         
-        std::vector<dyno::static_path_oram::Block> insert_batch;
-        std::vector<std::pair<dyno::static_path_oram::Key, bool>> search_delete_batch;
-        
-        for (size_t i = 0; i < mid; ++i) {
-            int op_type = work_type;
-            if (work_type == 3) {
-                op_type = i % 3;
-            }
-            
-            dyno::static_path_oram::Key key = (rng() % sonic->Capacity()) + 1; 
-            
-            if (op_type == 0) { // Insert
-                dyno::static_path_oram::Block b(true);
-                b.meta_.key_ = key;
-                b.meta_.pos_ = sonic->GenerateRandomLeaf();
-                b.val_ = std::make_unique<uint8_t[]>(256);
-                insert_batch.push_back(std::move(b));
-            } else {
-                search_delete_batch.push_back({key, true});
-            }
-        }
-
         double ms = 0.0;
-        
-        auto start = std::chrono::high_resolution_clock::now();
-        
         if (raw_sonic_mode == 2) {
             ms = sonic->SpinlockSonicBenchmark(work_type, mid);
-        } else if (raw_sonic_mode == 1) {
-            ms = sonic->RawSonicBenchmark(work_type, mid);
         } else {
-            if (work_type == 1 || work_type == 2 || work_type == 3) {
-                sonic->ReadAndRemoveBatch(search_delete_batch, enc_key);
-            }
-            if (work_type == 0 || work_type == 3) {
-                sonic->InsertBatch(insert_batch, enc_key);
-            }
-            auto end = std::chrono::high_resolution_clock::now();
-            ms = std::chrono::duration<double, std::milli>(end - start).count();
+            ms = sonic->RawSonicBenchmark(work_type, mid);
         }
         
         std::cout << " -> " << ms << " ms\n";
@@ -95,6 +58,7 @@ BenchmarkResult MeasureSonicThroughput(
     double throughput = (best_batch / best_latency) * 1000.0;
     return {best_batch, best_latency, throughput};
 }
+
 
 
 
@@ -130,7 +94,7 @@ BenchmarkResult MeasureThroughput(
             
             op.key = (rng() % oram->Capacity()) + 1; 
             if (op.type == ORam::OpType::Insert) {
-                op.val = std::make_unique<uint8_t[]>(256);
+                op.val = std::make_unique<uint8_t[]>(56);
             }
             batch.push_back(std::move(op));
         }
@@ -165,8 +129,8 @@ int main(int argc, char **argv) {
     
     auto enc_key = GenerateKey();
     
-    size_t capacity_po2 = 18; // 2^18 = 262,144 blocks
-    auto oram = std::make_unique<ORam>(capacity_po2, 256); 
+    size_t capacity_po2 = 23; // 2^23 = 8,388,608 blocks
+    auto oram = std::make_unique<ORam>(capacity_po2, 56); 
     
     // Fill the ORAM to 50% capacity so we don't trigger resizes easily
     std::cout << "Initializing ORAM to 50% capacity...\n";
@@ -176,7 +140,7 @@ int main(int argc, char **argv) {
         ORam::BatchOperation op;
         op.type = ORam::OpType::Insert;
         op.key = i;
-        op.val = std::make_unique<uint8_t[]>(256);
+        op.val = std::make_unique<uint8_t[]>(56);
         init_batch.push_back(std::move(op));
         
         if (init_batch.size() >= 16384 || i == target_size) {
@@ -199,38 +163,22 @@ int main(int argc, char **argv) {
     std::cout << "=============================================\n";
     std::cout << "Testing PAPER-ONLINE SONIC Interface (Raw Throughput - NO Evictions, Deferred offline, SPINLOCK MODE)\n";
     std::cout << "=============================================\n";
-    auto sonic = std::make_unique<dyno::dynamic_stepping_path_oram::SonicORamAdapter>(1ULL << capacity_po2, 256, true);
+    auto sonic = std::make_unique<dyno::dynamic_stepping_path_oram::PMChainAdapter>(1ULL << capacity_po2, 56, 100000);
 
-    auto res_core_search_spin = MeasureSonicThroughput(sonic.get(), enc_key, 1, target_sla_ms, 2);
+    auto res_core_search_spin = MeasurePMChainThroughput(sonic.get(), 1, target_sla_ms, 2);
     std::cout << "[PAPER-ONLINE SPINLOCK] 100% Search," << res_core_search_spin.batch_size << "," << res_core_search_spin.latency_ms << "," << res_core_search_spin.throughput_ops_sec << "\n\n";
 
     std::cout << "=============================================\n";
     std::cout << "Testing PAPER-ONLINE SONIC Interface (Raw Throughput - NO Evictions, Deferred offline, POLITE MODE)\n";
     std::cout << "=============================================\n";
-    auto res_core_search = MeasureSonicThroughput(sonic.get(), enc_key, 1, target_sla_ms, 1);
+    auto res_core_search = MeasurePMChainThroughput(sonic.get(), 1, target_sla_ms, 1);
     std::cout << "[PAPER-ONLINE POLITE] 100% Search," << res_core_search.batch_size << "," << res_core_search.latency_ms << "," << res_core_search.throughput_ops_sec << "\n";
-    auto res_core_mixed = MeasureSonicThroughput(sonic.get(), enc_key, 3, target_sla_ms, 1);
+    auto res_core_mixed = MeasurePMChainThroughput(sonic.get(), 3, target_sla_ms, 1);
     std::cout << "[PAPER-ONLINE POLITE] Mixed (I/S/D)," << res_core_mixed.batch_size << "," << res_core_mixed.latency_ms << "," << res_core_mixed.throughput_ops_sec << "\n";
-    auto res_core_delete = MeasureSonicThroughput(sonic.get(), enc_key, 2, target_sla_ms, 1);
+    auto res_core_delete = MeasurePMChainThroughput(sonic.get(), 2, target_sla_ms, 1);
     std::cout << "[PAPER-ONLINE POLITE] 100% Delete," << res_core_delete.batch_size << "," << res_core_delete.latency_ms << "," << res_core_delete.throughput_ops_sec << "\n";
-    auto res_core_insert = MeasureSonicThroughput(sonic.get(), enc_key, 0, target_sla_ms, 1);
+    auto res_core_insert = MeasurePMChainThroughput(sonic.get(), 0, target_sla_ms, 1);
     std::cout << "[PAPER-ONLINE POLITE] 100% Insert," << res_core_insert.batch_size << "," << res_core_insert.latency_ms << "," << res_core_insert.throughput_ops_sec << "\n\n";
-
-    std::cout << "\n=============================================\n";
-    std::cout << "Testing Base SONIC Interface (Raw Throughput - WITH Adapter Linear Scan Overhead)\n";
-    std::cout << "=============================================\n";
-    
-    auto res_sonic_search = MeasureSonicThroughput(sonic.get(), enc_key, 1, target_sla_ms);
-    std::cout << "[Adapter] 100% Search," << res_sonic_search.batch_size << "," << res_sonic_search.latency_ms << "," << res_sonic_search.throughput_ops_sec << "\n";
-
-    auto res_sonic_mixed = MeasureSonicThroughput(sonic.get(), enc_key, 3, target_sla_ms);
-    std::cout << "[Adapter] Mixed (I/S/D)," << res_sonic_mixed.batch_size << "," << res_sonic_mixed.latency_ms << "," << res_sonic_mixed.throughput_ops_sec << "\n";
-
-    auto res_sonic_delete = MeasureSonicThroughput(sonic.get(), enc_key, 2, target_sla_ms);
-    std::cout << "[Adapter] 100% Delete," << res_sonic_delete.batch_size << "," << res_sonic_delete.latency_ms << "," << res_sonic_delete.throughput_ops_sec << "\n";
-
-    auto res_sonic_insert = MeasureSonicThroughput(sonic.get(), enc_key, 0, target_sla_ms);
-    std::cout << "[Adapter] 100% Insert," << res_sonic_insert.batch_size << "," << res_sonic_insert.latency_ms << "," << res_sonic_insert.throughput_ops_sec << "\n";
 
     std::cout << "\n=============================================\n";
     std::cout << "Testing DYNO-SONIC Interface (High-Level Throughput)\n";
