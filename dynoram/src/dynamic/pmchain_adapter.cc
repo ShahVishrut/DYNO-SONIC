@@ -91,15 +91,30 @@ double PMChainAdapter::SpinlockSonicBenchmark(int work_type, size_t batch_size, 
     auto start = std::chrono::high_resolution_clock::now();
 
     impl_->driver->chain_.populate_requests(sn::util::span<const Impl::PMDriver::operation>(ops.data(), ops.size()));
+    auto t1 = std::chrono::high_resolution_clock::now();
+    
     impl_->driver->chain_.execute_o2th_chains();
+    auto t2 = std::chrono::high_resolution_clock::now();
+    
     impl_->driver->chain_.sort_o2th_chains();
+    auto t3 = std::chrono::high_resolution_clock::now();
+    
     impl_->driver->chain_.execute_oram_queries();
+    auto t4 = std::chrono::high_resolution_clock::now();
 
     impl_->driver->chain_.flush_pending();
+    auto t5 = std::chrono::high_resolution_clock::now();
 
-    auto end = std::chrono::high_resolution_clock::now();
+    if (!steady_state && batch_size == 100000) {
+        std::cout << "\n[PMChain Breakdown] "
+                  << "\n  Populate: " << std::chrono::duration<double, std::milli>(t1 - start).count() << " ms"
+                  << "\n  O2TH Build: " << std::chrono::duration<double, std::milli>(t2 - t1).count() << " ms"
+                  << "\n  O2TH Sort: " << std::chrono::duration<double, std::milli>(t3 - t2).count() << " ms"
+                  << "\n  ORAM Queries: " << std::chrono::duration<double, std::milli>(t4 - t3).count() << " ms"
+                  << "\n  Eviction (Flush): " << std::chrono::duration<double, std::milli>(t5 - t4).count() << " ms\n";
+    }
     
-    return std::chrono::duration<double, std::milli>(end - start).count();
+    return std::chrono::duration<double, std::milli>(t5 - start).count();
 }
 
 } // namespace dyno::dynamic_stepping_path_oram
