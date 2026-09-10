@@ -2,7 +2,7 @@
 #include "sonic/omap/suboram/pmchain_driver.hpp"
 #include "sonic/threads/thread_team.hpp"
 #include "sonic/threads/platform/pthread_thread_pool.hpp"
-#include "sonic/threads/thread_context.hpp"
+#include "sonic/threads/tuning.hpp"
 #include <chrono>
 #include <iostream>
 #include <random>
