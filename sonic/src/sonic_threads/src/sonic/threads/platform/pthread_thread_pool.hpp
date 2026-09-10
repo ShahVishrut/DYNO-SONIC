@@ -19,12 +19,12 @@ namespace sn::threads {
 class pthread_thread_pool {
 public:
   explicit pthread_thread_pool(std::size_t worker_count) :
-      pool_(worker_count, sn::threads::park_mode::none), workers_(worker_count), args_(worker_count), worker_bindings_(worker_count) {
+      pool_(worker_count), workers_(worker_count), args_(worker_count), worker_bindings_(worker_count) {
     start_workers();
   }
 
   explicit pthread_thread_pool(thread_group_reservation reservation, std::string label = {}) :
-      pool_(reservation.worker_count(), sn::threads::park_mode::none),
+      pool_(reservation.worker_count()),
       workers_(reservation.worker_count()),
       args_(reservation.worker_count()),
       worker_bindings_(reservation.workers()),
