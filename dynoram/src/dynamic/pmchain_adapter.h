@@ -26,10 +26,10 @@ class PMChainAdapter {
 
  private:
   struct Impl;
-  std::unique_ptr<Impl> impl_;
   size_t capacity_;
   size_t val_len_;
   size_t max_batch_size_;
+  std::unique_ptr<Impl> impl_;
 };
 
 } // namespace dyno::dynamic_stepping_path_oram
