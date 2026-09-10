@@ -31,7 +31,7 @@ struct PMChainAdapter::Impl {
 
         sn::omap::suboram::pmchain::config cfg{};
         cfg.block_count = capacity;
-        cfg.batch_size = ((max_batch_size + 63) / 64) * 64;
+        cfg.batch_size = ((max_batch_size + 127) / 128) * 128;
         cfg.bucket_real_size = 16;
         cfg.bucket_dummy_size = 16;
         cfg.eviction_rate = 2;
