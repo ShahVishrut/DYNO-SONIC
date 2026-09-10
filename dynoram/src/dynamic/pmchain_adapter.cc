@@ -39,6 +39,7 @@ struct PMChainAdapter::Impl {
         cfg.evict_batch = 2;
         cfg.access_concurrency = 24;
         cfg.posmap_bucket_size = 64; 
+        cfg.disjoint_epoch_window = 1024; 
 
         driver = std::make_unique<PMDriver>(cfg, std::move(*eviction_team), std::move(*access_team));
     }
