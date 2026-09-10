@@ -59,7 +59,7 @@ double PMChainAdapter::SpinlockSonicBenchmark(int work_type, size_t batch_size, 
         std::terminate();
     }
 
-    const size_t aligned_batch_size = impl_->driver->chain_.config().batch_size;
+    const size_t aligned_batch_size = ((max_batch_size_ + 127) / 128) * 128;
     std::vector<Impl::PMDriver::operation> ops(aligned_batch_size);
     std::mt19937_64 rng(1337);
 
