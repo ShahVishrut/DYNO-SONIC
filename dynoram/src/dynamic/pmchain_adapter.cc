@@ -1,7 +1,7 @@
 #include "src/dynamic/pmchain_adapter.h"
 #include "sonic/omap/suboram/pmchain_driver.hpp"
 #include "sonic/threads/thread_team.hpp"
-#include "sonic/threads/pthread_thread_pool.hpp"
+#include "sonic/threads/platform/pthread_thread_pool.hpp"
 #include "sonic/threads/thread_context.hpp"
 #include <chrono>
 #include <iostream>
