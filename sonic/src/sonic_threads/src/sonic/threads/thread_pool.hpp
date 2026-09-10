@@ -300,8 +300,8 @@ inline work_item* thread_pool::pop_next_work() noexcept {
 }
 
 inline work_item* thread_pool::wait_for_work() noexcept {
-  unique_lock<mutex> lock(queue_lock_);
   for (;;) {
+    unique_lock<mutex> lock(queue_lock_);
     if (auto* work = pop_next_work()) {
       return work;
     }
@@ -310,11 +310,16 @@ inline work_item* thread_pool::wait_for_work() noexcept {
       return nullptr;
     }
 
+    if (park_mode_ == park_mode::none) {
+      lock.unlock();
+      detail::park_wait(park_mode_, park_seq_, 0); // calls cpu_relax()
+      continue;
+    }
+
     if (detail::park_supports_sleep(park_mode_) && park_requested_.load(std::memory_order_acquire)) {
       const std::uint32_t expected = park_seq_.load(std::memory_order_acquire);
       lock.unlock();
       detail::park_wait(park_mode_, park_seq_, expected);
-      lock.lock();
       continue;
     }
 
