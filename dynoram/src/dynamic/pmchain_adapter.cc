@@ -9,12 +9,12 @@
 
 namespace dyno::dynamic_stepping_path_oram {
 
+#include "sonic/oram/zingoram/analysis.hpp"
+
 struct PMChainAdapter::Impl {
     sn::threads::thread_context thread_ctx;
-    std::unique_ptr<sn::threads::pthread_thread_pool> eviction_pool;
+    std::unique_ptr<sn::threads::pthread_thread_pool> domain_pool;
     std::unique_ptr<sn::threads::thread_team> eviction_team;
-    
-    std::unique_ptr<sn::threads::pthread_thread_pool> access_pool;
     std::unique_ptr<sn::threads::thread_team> access_team;
 
     using PMDriver = sn::omap::suboram::pmchain::driver<uint64_t, 56>;
@@ -23,22 +23,30 @@ struct PMChainAdapter::Impl {
     Impl(size_t capacity, size_t max_batch_size) {
         thread_ctx.bind_current_thread();
         
-        eviction_pool = std::make_unique<sn::threads::pthread_thread_pool>(thread_ctx, 8, "pmchain-evict");
-        eviction_team = std::make_unique<sn::threads::thread_team>(eviction_pool->pool(), 8); 
-
-        access_pool = std::make_unique<sn::threads::pthread_thread_pool>(thread_ctx, 8, "pmchain-access");
-        access_team = std::make_unique<sn::threads::thread_team>(access_pool->pool(), 8); 
+        domain_pool = std::make_unique<sn::threads::pthread_thread_pool>(thread_ctx, 7, "pmchain-pool");
+        eviction_team = std::make_unique<sn::threads::thread_team>(domain_pool->pool(), 8); 
+        access_team = std::make_unique<sn::threads::thread_team>(domain_pool->pool(), 8); 
 
         sn::omap::suboram::pmchain::config cfg{};
         cfg.block_count = capacity;
         cfg.batch_size = ((max_batch_size + 127) / 128) * 128;
         cfg.bucket_real_size = 16;
         cfg.bucket_dummy_size = 16;
-        cfg.eviction_rate = 2;
+        cfg.eviction_rate = static_cast<uint32_t>(sn::oram::zingoram::analysis::max_eviction_rate(16));
         cfg.routing_depth = 3;
         cfg.evict_batch = 2;
         cfg.access_concurrency = 8;
         cfg.posmap_bucket_size = 64; 
+        
+        uint64_t subtree_count = 1ULL << cfg.routing_depth;
+        uint64_t num_pathreads = cfg.eviction_rate * subtree_count * cfg.evict_batch;
+        
+        uint64_t clamped = std::max<uint64_t>(cfg.batch_size, num_pathreads);
+        uint64_t remainder = clamped % num_pathreads;
+        if (remainder != 0) {
+            clamped = clamped + (num_pathreads - remainder);
+        }
+        cfg.disjoint_epoch_window = clamped;
 
         driver = std::make_unique<PMDriver>(cfg, std::move(*eviction_team), std::move(*access_team));
     }
