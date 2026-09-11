@@ -366,7 +366,7 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
   O2TH::config cfg;
   cfg.block_count = B;
   cfg.bucket_size = 64;
-  sn::util::log::logger log = sn::util::log::create_null();
+  sn::util::log::logger log = sn::util::log::create("oram:batch");
   O2TH o2th(cfg, std::move(team), log);
   o2th.initialize();
 
@@ -450,7 +450,7 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
       bool target_lt = static_cast<uint8_t>(a.is_target) < static_cast<uint8_t>(b.is_target);
       return sn::obliv::ct_select(target_lt, key_lt, key_eq);
   };
-  sn::sortshuffle::ser::bitonic::detail::bitonic_sort_impl(join_arr.data(), 2 * B, [](const JoinElement& e) { return e; }, comp_join1, sn::sortshuffle::ser::bitonic::detail::no_hook{});
+  sn::sortshuffle::ser::bitonic::detail::bitonic_sort_impl(join_arr.data(), 2 * B, [](const JoinElement& e) { return e; }, comp_join1, sn::sortshuffle::ser::bitonic::detail::noop_hook{});
 
   uint64_t cur_phys_k = 0;
   int8_t cur_sub_idx = -1;
@@ -471,7 +471,7 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
       bool idx_lt = sn::obliv::ct_lt(a.batch_idx, b.batch_idx);
       return sn::obliv::ct_select(idx_lt, target_gt, target_eq);
   };
-  sn::sortshuffle::ser::bitonic::detail::bitonic_sort_impl(join_arr.data(), 2 * B, [](const JoinElement& e) { return e; }, comp_join2, sn::sortshuffle::ser::bitonic::detail::no_hook{});
+  sn::sortshuffle::ser::bitonic::detail::bitonic_sort_impl(join_arr.data(), 2 * B, [](const JoinElement& e) { return e; }, comp_join2, sn::sortshuffle::ser::bitonic::detail::noop_hook{});
 
   for (size_t i = 0; i < B; ++i) {
       batch[elems[i].seq].phys_k = join_arr[i].phys_k;
