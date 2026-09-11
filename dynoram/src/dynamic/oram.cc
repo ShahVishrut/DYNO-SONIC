@@ -16,8 +16,15 @@
 #include "src/utils/crypto.h"
 #include "sonic/obliv/ops/core_ops.hpp"
 #include "sonic/sortshuffle/ser/bitonic.hpp"
+#include <mutex>
+#include "sonic/threads/platform/pthread_thread_pool.hpp"
+#include "sonic/omap/o2th/client.hpp"
 
 namespace dyno::dynamic_stepping_path_oram {
+
+static sn::threads::thread_context g_thread_ctx{sn::threads::thread_policy{.affinity = sn::threads::thread_affinity::inherit}};
+static std::unique_ptr<sn::threads::pthread_thread_pool> g_oram_pool = nullptr;
+static std::once_flag g_oram_pool_init;
 
 ORam::ORam(int starting_size_power_of_two, size_t val_len)
     : capacity_(1UL << starting_size_power_of_two),
@@ -228,7 +235,7 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
   size_t original_B = batch.size();
   if (original_B == 0) return;
 
-  size_t B = 1;
+  size_t B = 64;
   while (B < original_B) B *= 2;
   
   if (B > original_B) {
@@ -347,45 +354,139 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
       op.phys_k = 0;
   }
   
-  int num_workers = 24;
+  std::cout << "[DYNO] Phase 2: O2TH LogMap Scan starting..." << std::endl;
   
-  // We process sub_orams_[0] (idx=0) and sub_orams_[1] (idx=1) cleanly in a loop
+  std::call_once(g_oram_pool_init, [](){ 
+      g_thread_ctx.bind_current_thread();
+      g_oram_pool = std::make_unique<sn::threads::pthread_thread_pool>(g_thread_ctx, 23, "oram-batch"); 
+  });
+  sn::threads::thread_team team(g_oram_pool->pool(), 24);
+
+  using O2TH = sn::omap::o2th::o2th_rwkv<uint64_t, 16>;
+  O2TH::config cfg;
+  cfg.block_count = B;
+  cfg.bucket_size = 64;
+  sn::util::log::logger log = sn::util::log::create_null();
+  O2TH o2th(cfg, std::move(team), log);
+  o2th.initialize();
+
+  std::vector<O2TH::maybe_dummy<O2TH::op_request>> build_set(B);
+  for (size_t i = 0; i < B; ++i) {
+      bool is_first = (i == 0) || !sn::obliv::ct_eq(elems[i].key, elems[i-1].key);
+      bool is_real = is_first & (elems[i].key != 0) & !elems[i].is_dummy;
+      
+      build_set[i].is_dummy = !is_real;
+      build_set[i].value.key = elems[i].key;
+      build_set[i].value.is_write = false;
+      build_set[i].value.extra_data = static_cast<uint32_t>(i);
+      std::fill(build_set[i].value.data.begin(), build_set[i].value.data.end(), 0);
+  }
+  
+  o2th.build(sn::util::span<O2TH::maybe_dummy<O2TH::op_request>>(build_set.data(), build_set.size()));
+
   for (int idx = 0; idx < 2; ++idx) {
       uint64_t cap = (idx == 0) ? cap_S : cap_L;
       if (cap > 0) {
-          std::vector<std::thread> workers;
-          // Thread-local arrays to prevent race conditions when writing to op.phys_k
-          std::vector<std::vector<int8_t>> tl_idx(num_workers, std::vector<int8_t>(B, -1));
-          std::vector<std::vector<uint64_t>> tl_phys_k(num_workers, std::vector<uint64_t>(B, 0));
-          
-          for (int w = 0; w < num_workers; ++w) {
-              workers.emplace_back([this, w, num_workers, cap, idx, B, &batch, &tl_idx, &tl_phys_k]() {
-                  for (uint64_t i = 1 + w; i <= cap; i += num_workers) {
-                      uint64_t log_k = log_map_[idx][i];
-                      for (size_t j = 0; j < B; ++j) {
-                          // FIX: Use bitwise '&' and ct_eq to prevent short-circuit branching!
-                          bool is_not_empty = !sn::obliv::ct_eq<uint64_t>(log_k, 0);
-                          bool is_key_match = sn::obliv::ct_eq<uint64_t>(static_cast<uint64_t>(batch[j].key), log_k);
-                          bool match = is_not_empty & is_key_match;
-                          
-                          tl_idx[w][j] = sn::obliv::ct_select<int8_t>(idx, tl_idx[w][j], match);
-                          tl_phys_k[w][j] = sn::obliv::ct_select<uint64_t>(i, tl_phys_k[w][j], match);
-                      }
-                  }
-              });
+          std::vector<O2TH::data_query> queries(cap);
+          for (size_t i = 1; i <= cap; ++i) {
+              uint64_t log_k = log_map_[idx][i];
+              bool is_real = !sn::obliv::ct_eq<uint64_t>(log_k, 0);
+              
+              std::array<uint8_t, 16> payload = {0};
+              std::memcpy(payload.data(), &i, sizeof(uint64_t));
+              int8_t sub_idx = static_cast<int8_t>(idx);
+              std::memcpy(payload.data() + 8, &sub_idx, sizeof(int8_t));
+              
+              queries[i-1].assign(sn::obliv::ct_select<uint64_t>(log_k, 0, is_real), payload, true);
           }
-          for (auto& worker : workers) worker.join();
+
+          std::vector<O2TH::bucket_index> pos_l1(cap);
+          std::vector<O2TH::bucket_index> pos_l2(cap);
           
-          // Oblivious merge of the thread-local results back into the main batch
-          for (size_t j = 0; j < B; ++j) {
-              for (int w = 0; w < num_workers; ++w) {
-                  // FIX: Use ct_eq to prevent compiler branch optimization on !=
-                  bool match = !sn::obliv::ct_eq<int8_t>(tl_idx[w][j], -1);
-                  batch[j].sub_oram_idx = sn::obliv::ct_select<int8_t>(tl_idx[w][j], batch[j].sub_oram_idx, match);
-                  batch[j].phys_k = sn::obliv::ct_select<uint64_t>(tl_phys_k[w][j], batch[j].phys_k, match);
-              }
-          }
+          o2th.access_batch(sn::util::span<O2TH::data_query>(queries.data(), queries.size()),
+                            sn::util::span<O2TH::bucket_index>(pos_l1.data(), pos_l1.size()),
+                            sn::util::span<O2TH::bucket_index>(pos_l2.data(), pos_l2.size()));
       }
+  }
+
+  std::vector<O2TH::maybe_dummy<O2TH::op_request>> retrieve_data(2 * B);
+  std::vector<uint8_t> compact_marks(2 * B);
+  std::vector<size_t> compact_prefix(2 * B + 1);
+  o2th.retrieve(sn::util::span<O2TH::maybe_dummy<O2TH::op_request>>(retrieve_data.data(), retrieve_data.size()),
+                sn::util::span<uint8_t>(compact_marks.data(), compact_marks.size()),
+                sn::util::span<size_t>(compact_prefix.data(), compact_prefix.size()));
+
+  struct alignas(8) JoinElement {
+      uint32_t sort_key;
+      bool is_target;
+      uint32_t batch_idx;
+      uint64_t phys_k;
+      int8_t sub_idx;
+  };
+
+  std::vector<JoinElement> join_arr(2 * B);
+  for (size_t i = 0; i < B; ++i) {
+      bool is_dummy_update = retrieve_data[i].is_dummy;
+      join_arr[i].sort_key = sn::obliv::ct_select<uint32_t>(UINT32_MAX, retrieve_data[i].value.extra_data, is_dummy_update);
+      join_arr[i].is_target = false;
+      join_arr[i].batch_idx = 0;
+      uint64_t phys_k = 0;
+      int8_t sub_idx = -1;
+      std::memcpy(&phys_k, retrieve_data[i].value.data.data(), sizeof(uint64_t));
+      std::memcpy(&sub_idx, retrieve_data[i].value.data.data() + 8, sizeof(int8_t));
+      join_arr[i].phys_k = phys_k;
+      join_arr[i].sub_idx = sub_idx;
+
+      join_arr[B + i].sort_key = static_cast<uint32_t>(i);
+      join_arr[B + i].is_target = true;
+      join_arr[B + i].batch_idx = static_cast<uint32_t>(i);
+      join_arr[B + i].phys_k = 0;
+      join_arr[B + i].sub_idx = -1;
+  }
+
+  auto comp_join1 = [](const JoinElement& a, const JoinElement& b) {
+      bool key_eq = sn::obliv::ct_eq(a.sort_key, b.sort_key);
+      bool key_lt = sn::obliv::ct_lt(a.sort_key, b.sort_key);
+      bool target_lt = static_cast<uint8_t>(a.is_target) < static_cast<uint8_t>(b.is_target);
+      return sn::obliv::ct_select(target_lt, key_lt, key_eq);
+  };
+  sn::sortshuffle::ser::bitonic::detail::bitonic_sort_impl(join_arr.data(), 2 * B, [](const JoinElement& e) { return e; }, comp_join1, sn::sortshuffle::ser::bitonic::detail::no_hook{});
+
+  uint64_t cur_phys_k = 0;
+  int8_t cur_sub_idx = -1;
+  for (size_t i = 0; i < 2 * B; ++i) {
+      bool is_update = !join_arr[i].is_target;
+      cur_phys_k = sn::obliv::ct_select<uint64_t>(join_arr[i].phys_k, cur_phys_k, is_update);
+      cur_sub_idx = sn::obliv::ct_select<int8_t>(join_arr[i].sub_idx, cur_sub_idx, is_update);
+      
+      join_arr[i].phys_k = sn::obliv::ct_select<uint64_t>(cur_phys_k, join_arr[i].phys_k, join_arr[i].is_target);
+      join_arr[i].sub_idx = sn::obliv::ct_select<int8_t>(cur_sub_idx, join_arr[i].sub_idx, join_arr[i].is_target);
+  }
+
+  auto comp_join2 = [](const JoinElement& a, const JoinElement& b) {
+      bool target_a = a.is_target;
+      bool target_b = b.is_target;
+      bool target_eq = target_a == target_b;
+      bool target_gt = target_a && !target_b;
+      bool idx_lt = sn::obliv::ct_lt(a.batch_idx, b.batch_idx);
+      return sn::obliv::ct_select(idx_lt, target_gt, target_eq);
+  };
+  sn::sortshuffle::ser::bitonic::detail::bitonic_sort_impl(join_arr.data(), 2 * B, [](const JoinElement& e) { return e; }, comp_join2, sn::sortshuffle::ser::bitonic::detail::no_hook{});
+
+  for (size_t i = 0; i < B; ++i) {
+      batch[elems[i].seq].phys_k = join_arr[i].phys_k;
+      batch[elems[i].seq].sub_oram_idx = join_arr[i].sub_idx;
+  }
+
+  uint64_t fw_phys_k = 0;
+  int8_t fw_sub_idx = -1;
+  for (size_t i = 0; i < B; ++i) {
+      bool is_first = (i == 0) || !sn::obliv::ct_eq(elems[i].key, elems[i-1].key);
+      fw_phys_k = sn::obliv::ct_select<uint64_t>(batch[elems[i].seq].phys_k, fw_phys_k, is_first);
+      fw_sub_idx = sn::obliv::ct_select<int8_t>(batch[elems[i].seq].sub_oram_idx, fw_sub_idx, is_first);
+      
+      batch[elems[i].seq].phys_k = fw_phys_k;
+      batch[elems[i].seq].sub_oram_idx = fw_sub_idx;
   }
 
   std::cout << "[DYNO] Phase 3: O-Scan (Collapse) starting..." << std::endl;
