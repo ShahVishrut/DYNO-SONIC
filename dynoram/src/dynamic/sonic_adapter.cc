@@ -70,6 +70,8 @@ private:
     bool stop;
 };
 
+#include "sonic/oram/zingoram/analysis.hpp"
+
 // Global thread pool for access workers to prevent std::system_error on rapid thread creation
 static std::unique_ptr<ThreadPool> g_access_pool = nullptr;
 static std::once_flag g_pool_init_flag;
@@ -80,7 +82,7 @@ using SonicClient = sn::oram::zingoram::client<SonicTraits>;
 
 struct SonicORamAdapter::Impl {
   sn::threads::thread_context thread_ctx{sn::threads::thread_policy{.affinity = sn::threads::thread_affinity::inherit}};
-  std::unique_ptr<sn::threads::pthread_thread_pool> eviction_pool;
+  std::unique_ptr<sn::threads::pthread_thread_pool> domain_pool;
   std::unique_ptr<sn::threads::thread_team> eviction_team;
   std::unique_ptr<SonicClient> client;
   SonicClient::access_scratch scratch;
@@ -92,19 +94,24 @@ struct SonicORamAdapter::Impl {
   Impl(size_t capacity, bool w_pos_map) : with_pos_map(w_pos_map) {
     thread_ctx.bind_current_thread();
     
-    // Create 8 eviction threads to handle the massive forest parallelism
-    eviction_pool = std::make_unique<sn::threads::pthread_thread_pool>(thread_ctx, 8, "oram-evict");
-    eviction_team = std::make_unique<sn::threads::thread_team>(eviction_pool->pool(), 8);
+    domain_pool = std::make_unique<sn::threads::pthread_thread_pool>(thread_ctx, 7, "oram-domain");
+    eviction_team = std::make_unique<sn::threads::thread_team>(domain_pool->pool(), 8);
 
     SonicTraits::options_t opts{};
     opts.block_count = capacity + 1;
     opts.bucket_real_size = 16;
     opts.bucket_dummy_size = 16;
-    opts.eviction_rate = 2; 
+    opts.eviction_rate = static_cast<uint32_t>(sn::oram::zingoram::analysis::max_eviction_rate(16)); 
     opts.routing_depth = 3; 
     opts.evict_batch = 2; 
     opts.access_concurrency = 8;
-    opts.disjoint_epoch_window = 1024;
+    
+    uint64_t subtree_count = 1ULL << opts.routing_depth;
+    uint64_t num_pathreads = opts.eviction_rate * subtree_count * opts.evict_batch;
+    uint64_t window = std::max<uint64_t>(1024ULL, num_pathreads);
+    uint64_t remainder = window % num_pathreads;
+    if (remainder != 0) window += (num_pathreads - remainder);
+    opts.disjoint_epoch_window = window;
 
     client = std::make_unique<SonicClient>(opts, std::move(*eviction_team));
     client->initialize();
@@ -292,8 +299,10 @@ void SonicORamAdapter::Insert(static_path_oram::Block block, crypto::Key enc_key
       cur_leaf = write_leaf;
   }
 
-  std::vector<uint8_t> in_buf(kSonicBlockBytes, 0);
-  std::vector<uint8_t> out_buf(kSonicBlockBytes, 0);
+  thread_local std::array<uint8_t, kSonicBlockBytes> in_buf;
+  thread_local std::array<uint8_t, kSonicBlockBytes> out_buf;
+  std::fill(in_buf.begin(), in_buf.end(), 0);
+  std::fill(out_buf.begin(), out_buf.end(), 0);
   size_t block_size = static_path_oram::BlockSize(val_len_);
   if (block_size <= kSonicBlockBytes) {
       block.ToBytes(val_len_, in_buf.data());
@@ -330,8 +339,8 @@ void SonicORamAdapter::Insert(static_path_oram::Block block, crypto::Key enc_key
   req.cur_leaf = sn::obliv::ct_select<uint64_t>(cur_leaf, 0, execute_access);
   req.new_leaf = sn::obliv::ct_select<uint64_t>(write_leaf, 0, execute_access);
   req.is_write = sn::obliv::ct_select<bool>(true, false, execute_access);
-  req.in = sn::util::span<uint8_t>(in_buf);
-  req.out = sn::util::span<uint8_t>(out_buf);
+  req.in = sn::util::span<uint8_t>(in_buf.data(), in_buf.size());
+  req.out = sn::util::span<uint8_t>(out_buf.data(), out_buf.size());
   impl_->client->access(req, tl_scratch);
   
   if (flush) impl_->client->flush_epoch();
@@ -636,8 +645,10 @@ std::vector<static_path_oram::Block> SonicORamAdapter::ReadBatch(const std::vect
                       bool is_delete = sn::obliv::ct_eq<uint8_t>(op.op_type, 2);
                       req.is_write = is_update | is_delete;
                       
-                      std::vector<uint8_t> in_buf(kSonicBlockBytes, 0);
-                      std::vector<uint8_t> out_buf(kSonicBlockBytes, 0);
+                      thread_local std::array<uint8_t, kSonicBlockBytes> in_buf;
+                      thread_local std::array<uint8_t, kSonicBlockBytes> out_buf;
+                      std::fill(in_buf.begin(), in_buf.end(), 0);
+                      std::fill(out_buf.begin(), out_buf.end(), 0);
                       
                       if (req.is_write) {
                           static_path_oram::BlockMetadata meta;
@@ -650,8 +661,8 @@ std::vector<static_path_oram::Block> SonicORamAdapter::ReadBatch(const std::vect
                           }
                       }
                       
-                      req.in = sn::util::span<uint8_t>(in_buf);
-                      req.out = sn::util::span<uint8_t>(out_buf);
+                      req.in = sn::util::span<uint8_t>(in_buf.data(), in_buf.size());
+                      req.out = sn::util::span<uint8_t>(out_buf.data(), out_buf.size());
 
                       auto pre_ops = impl_->client->state_ref().metrics_snapshot().access_ops;
                       
@@ -771,7 +782,8 @@ void SonicORamAdapter::InsertBatch(std::vector<static_path_oram::Block>& blocks,
               bool real = (!sn::obliv::ct_eq<uint64_t>(k, 0));
               uint64_t leaf = batch_new_leaves[j];
               
-              std::vector<uint8_t> in_buf(kSonicBlockBytes, 0);
+              thread_local std::array<uint8_t, kSonicBlockBytes> in_buf;
+              std::fill(in_buf.begin(), in_buf.end(), 0);
               size_t block_size = static_path_oram::BlockSize(val_len_);
               if (block_size <= kSonicBlockBytes) {
                   auto meta_bytes = bytes::ToBytes(blocks[j].meta_);
