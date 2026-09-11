@@ -379,7 +379,11 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
       build_set[i].value.key = elems[i].key;
       build_set[i].value.is_write = false;
       build_set[i].value.extra_data = static_cast<uint32_t>(i);
-      std::fill(build_set[i].value.data.begin(), build_set[i].value.data.end(), 0);
+      
+      std::array<uint8_t, 16> default_payload = {0};
+      int8_t default_sub = -1;
+      std::memcpy(default_payload.data() + 8, &default_sub, sizeof(int8_t));
+      std::memcpy(build_set[i].value.data.data(), default_payload.data(), 16);
   }
   
   o2th.build(sn::util::span<O2TH::maybe_dummy<O2TH::op_request>>(build_set.data(), build_set.size()));
@@ -478,8 +482,8 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
   sn::sortshuffle::ser::bitonic::detail::bitonic_sort_impl(join_arr.data(), 2 * B, ext2, comp_join2, hook2);
 
   for (size_t i = 0; i < B; ++i) {
-      batch[elems[i].seq].phys_k = join_arr[i].phys_k;
-      batch[elems[i].seq].sub_oram_idx = join_arr[i].sub_idx;
+      batch[elems[i].seq].phys_k = join_arr[B + i].phys_k;
+      batch[elems[i].seq].sub_oram_idx = join_arr[B + i].sub_idx;
   }
 
   uint64_t fw_phys_k = 0;
