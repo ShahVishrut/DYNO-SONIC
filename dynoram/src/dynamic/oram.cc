@@ -525,14 +525,7 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
       if (val_len_ > 0) {
           sn::obliv::ct_select_array(current_payload.data(), batch[elems[i].seq].val.get(), current_payload.data(), val_len_, is_write);
       }
-      has_payload = sn::obliv::ct_select(true, has_payload, is_write);
-      
-      bool should_convert_to_update = is_search & has_payload & !is_deleted;
-      sn::obliv::ct_set_ref(elems[i].op_type, static_cast<uint8_t>(OpType::Update), should_convert_to_update);
-      
-      if (val_len_ > 0) {
-          sn::obliv::ct_select_array(batch[elems[i].seq].val.get(), current_payload.data(), batch[elems[i].seq].val.get(), val_len_, should_convert_to_update);
-      }
+      has_payload = has_payload | is_write;
       
       is_deleted = sn::obliv::ct_select(true, is_deleted, is_delete);
       is_deleted = sn::obliv::ct_select(false, is_deleted, is_insert);
@@ -546,7 +539,7 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
       
       // Searches resolved from previous operations in batch become dummy
       // Updates on deleted keys are invalid no-ops and must also become dummy
-      bool search_becomes_dummy = is_search & is_deleted;
+      bool search_becomes_dummy = (is_search & has_payload) | (is_search & is_deleted);
       bool update_becomes_dummy = is_update & is_deleted;
       sn::obliv::ct_set_ref(elems[i].is_dummy, true, search_becomes_dummy | update_becomes_dummy);
   }
