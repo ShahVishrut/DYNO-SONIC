@@ -33,6 +33,8 @@ class SonicORamAdapter {
       bool is_real;
       uint8_t op_type; // 1=Search, 2=Delete, 3=Update
       std::shared_ptr<uint8_t[]> val; // Only valid if op_type == 3
+      uint64_t cur_leaf = 0;
+      uint64_t new_leaf = 0;
   };
 
   std::vector<static_path_oram::Key> ObliviousExtractValidKeys(size_t k, size_t T, std::function<bool(static_path_oram::Key)> filter = nullptr);

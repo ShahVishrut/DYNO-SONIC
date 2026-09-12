@@ -108,7 +108,7 @@ struct SonicORamAdapter::Impl {
     
     uint64_t subtree_count = 1ULL << opts.routing_depth;
     uint64_t num_pathreads = opts.eviction_rate * subtree_count * opts.evict_batch;
-    uint64_t window = std::max<uint64_t>(1024ULL, num_pathreads);
+    uint64_t window = std::max<uint64_t>(1024ULL, num_pathreads) + 131072ULL; // B
     uint64_t remainder = window % num_pathreads;
     if (remainder != 0) window += (num_pathreads - remainder);
     opts.disjoint_epoch_window = window;
@@ -371,52 +371,8 @@ std::vector<static_path_oram::Block> SonicORamAdapter::ReadAndRemoveBatch(const 
   }
 
   int num_workers = 24;
-  if (impl_->with_pos_map) {
-      std::cout << "    ... ReadAndRemoveBatch oblivious pos_map scan starting..." << std::endl;
-      
-      std::vector<uint64_t> flat_keys(B);
-      std::vector<bool> flat_is_real(B);
-      for (size_t j = 0; j < B; ++j) {
-          flat_keys[j] = keys_with_real_flags[j].first;
-          flat_is_real[j] = keys_with_real_flags[j].second;
-      }
-
-      std::vector<std::thread> workers;
-      std::vector<std::vector<uint64_t>> thread_local_leaves(num_workers, std::vector<uint64_t>(B, UINT64_MAX));
-      
-      for (int i = 0; i < num_workers; ++i) {
-          workers.emplace_back([this, i, num_workers, B, &flat_keys, &flat_is_real, &thread_local_leaves]() {
-              uint64_t chunk = (capacity_ + num_workers) / num_workers;
-              uint64_t pos_start = 1 + i * chunk;
-              uint64_t pos_end = std::min(static_cast<uint64_t>(capacity_ + 1), pos_start + chunk);
-              
-              for (uint64_t pos = pos_start; pos < pos_end; ++pos) {
-                  uint64_t current_pos = impl_->pos_map[pos];
-                  uint64_t next_pos = current_pos;
-                  for (size_t j = 0; j < B; ++j) {
-                      bool match = sn::obliv::ct_eq<uint64_t>(pos, flat_keys[j]) & flat_is_real[j];
-                      thread_local_leaves[i][j] = sn::obliv::ct_select<uint64_t>(current_pos, thread_local_leaves[i][j], match);
-                      next_pos = sn::obliv::ct_select<uint64_t>(UINT64_MAX, next_pos, match);
-                  }
-                  impl_->pos_map[pos] = next_pos;
-              }
-          });
-      }
-      for (auto& w : workers) w.join();
-      
-      for (size_t j = 0; j < B; ++j) {
-          uint64_t global_found = UINT64_MAX;
-          for (int i = 0; i < num_workers; ++i) {
-              bool match = !sn::obliv::ct_eq<uint64_t>(thread_local_leaves[i][j], UINT64_MAX);
-              global_found = sn::obliv::ct_select<uint64_t>(thread_local_leaves[i][j], global_found, match);
-          }
-          bool has_leaf = !sn::obliv::ct_eq<uint64_t>(global_found, UINT64_MAX);
-          batch_cur_leaves[j] = sn::obliv::ct_select<uint64_t>(global_found, impl_->GenerateLeaf(), has_leaf);
-      }
-  } else {
-      for (size_t j = 0; j < B; ++j) {
-          batch_cur_leaves[j] = sn::obliv::ct_select<uint64_t>(keys_with_real_flags[j].first - 1, impl_->GenerateLeaf(), keys_with_real_flags[j].second);
-      }
+  for (size_t j = 0; j < B; ++j) {
+      batch_cur_leaves[j] = sn::obliv::ct_select<uint64_t>(keys_with_real_flags[j].first - 1, impl_->GenerateLeaf(), keys_with_real_flags[j].second);
   }
 
   std::call_once(g_pool_init_flag, [](){ g_access_pool = std::make_unique<ThreadPool>(24); });
@@ -503,7 +459,6 @@ std::vector<static_path_oram::Block> SonicORamAdapter::ReadAndRemoveBatch(const 
       
       std::unique_lock<std::mutex> lock(ops_mutex);
       chunk_cv.wait(lock, [&tasks_pending]{ return tasks_pending == 0; });
-      impl_->client->flush_epoch();
   }
 
   for (int i = 0; i < num_workers; ++i) {
@@ -551,64 +506,11 @@ std::vector<static_path_oram::Block> SonicORamAdapter::ReadBatch(const std::vect
   std::vector<uint64_t> batch_new_leaves(B, 0);
   
   for (size_t j = 0; j < B; ++j) {
-      batch_new_leaves[j] = impl_->GenerateLeaf();
+      batch_cur_leaves[j] = ops[j].cur_leaf;
+      batch_new_leaves[j] = ops[j].new_leaf;
   }
 
   int num_workers = 24;
-  if (impl_->with_pos_map) {
-      std::cout << "    ... ReadBatch oblivious pos_map scan starting (N=" << capacity_ << ", B=" << B << ")!" << std::endl;
-      
-      // 1. Flatten arrays for L1 Cache alignment (no pointer chasing in inner loop)
-      std::vector<uint64_t> flat_keys(B);
-      std::vector<bool> flat_is_real(B);
-      std::vector<bool> flat_is_delete(B);
-      for (size_t j = 0; j < B; ++j) {
-          flat_keys[j] = ops[j].key;
-          flat_is_real[j] = ops[j].is_real;
-          flat_is_delete[j] = sn::obliv::ct_eq<uint8_t>(ops[j].op_type, 2);
-      }
-
-      std::vector<std::thread> workers;
-      std::vector<std::vector<uint64_t>> thread_local_leaves(num_workers, std::vector<uint64_t>(B, UINT64_MAX));
-      
-      for (int i = 0; i < num_workers; ++i) {
-          workers.emplace_back([this, i, num_workers, B, &flat_keys, &flat_is_real, &flat_is_delete, &batch_new_leaves, &thread_local_leaves]() {
-              // 2. Contiguous memory chunks to prevent False Sharing and preserve Prefetcher
-              uint64_t chunk = (capacity_ + num_workers) / num_workers;
-              uint64_t pos_start = 1 + i * chunk;
-              uint64_t pos_end = std::min(static_cast<uint64_t>(capacity_ + 1), pos_start + chunk);
-              
-              for (uint64_t pos = pos_start; pos < pos_end; ++pos) {
-                  uint64_t current_pos = impl_->pos_map[pos];
-                  uint64_t next_pos = current_pos;
-                  for (size_t j = 0; j < B; ++j) {
-                      bool match = sn::obliv::ct_eq<uint64_t>(pos, flat_keys[j]) & flat_is_real[j];
-                      thread_local_leaves[i][j] = sn::obliv::ct_select<uint64_t>(current_pos, thread_local_leaves[i][j], match);
-                      
-                      uint64_t candidate_next = sn::obliv::ct_select<uint64_t>(UINT64_MAX, batch_new_leaves[j], flat_is_delete[j]);
-                      next_pos = sn::obliv::ct_select<uint64_t>(candidate_next, next_pos, match);
-                      current_pos = sn::obliv::ct_select<uint64_t>(next_pos, current_pos, match);
-                  }
-                  impl_->pos_map[pos] = next_pos; // Safe to write because of contiguous thread isolation
-              }
-          });
-      }
-      for (auto& w : workers) w.join();
-      
-      for (size_t j = 0; j < B; ++j) {
-          uint64_t global_found = UINT64_MAX;
-          for (int i = 0; i < num_workers; ++i) {
-              bool match = !sn::obliv::ct_eq<uint64_t>(thread_local_leaves[i][j], UINT64_MAX);
-              global_found = sn::obliv::ct_select<uint64_t>(thread_local_leaves[i][j], global_found, match);
-          }
-          bool has_leaf = !sn::obliv::ct_eq<uint64_t>(global_found, UINT64_MAX);
-          batch_cur_leaves[j] = sn::obliv::ct_select<uint64_t>(global_found, impl_->GenerateLeaf(), has_leaf);
-      }
-  } else {
-      for (size_t j = 0; j < B; ++j) {
-          batch_cur_leaves[j] = sn::obliv::ct_select<uint64_t>(ops[j].key - 1, impl_->GenerateLeaf(), ops[j].is_real);
-      }
-  }
 
   std::call_once(g_pool_init_flag, [](){ g_access_pool = std::make_unique<ThreadPool>(24); });
 
@@ -713,16 +615,12 @@ std::vector<static_path_oram::Block> SonicORamAdapter::ReadBatch(const std::vect
       }
       std::unique_lock<std::mutex> lock(ops_mutex);
       chunk_cv.wait(lock, [&tasks_pending]{ return tasks_pending == 0; });
-      
-      // SONIC MUST flush periodically to prevent disjoint window overflow
-      impl_->client->flush_epoch();
   }
 
   for (int i = 0; i < num_workers; ++i) {
       memory_access_count_ += thread_access_ops[i];
       memory_bytes_moved_total_ += thread_access_ops[i] * kSonicBlockBytes * 2;
   }
-  impl_->client->flush_epoch();
 
   return results;
 }
@@ -731,47 +629,6 @@ void SonicORamAdapter::InsertBatch(std::vector<static_path_oram::Block>& blocks,
   size_t B = blocks.size();
   
   if (all_new) {
-      // 1. Pre-generate all random leaves for the batch
-      std::vector<uint64_t> batch_new_leaves(B, 0);
-      for (size_t j = 0; j < B; ++j) {
-          batch_new_leaves[j] = impl_->GenerateLeaf();
-      }
-
-      // 2. Parallelized Oblivious PosMap Scan (Cache-Aligned)
-      if (impl_->with_pos_map) {
-          std::cout << "    ... InsertBatch (all_new) oblivious pos_map scan starting..." << std::endl;
-          int num_workers = 24;
-          
-          // FLATTEN ARRAYS: Prevents pointer chasing and perfectly aligns with L1 CPU Cache
-          std::vector<uint64_t> flat_keys(B);
-          std::vector<bool> flat_is_real(B);
-          for (size_t j = 0; j < B; ++j) {
-              flat_keys[j] = blocks[j].meta_.key_;
-              flat_is_real[j] = !sn::obliv::ct_eq<uint64_t>(flat_keys[j], 0);
-          }
-
-          std::vector<std::thread> workers;
-          for (int i = 0; i < num_workers; ++i) {
-              workers.emplace_back([this, i, num_workers, B, &flat_keys, &flat_is_real, &batch_new_leaves]() {
-                  // CONTIGUOUS CHUNKS: Preserves hardware prefetching and stops false sharing
-                  uint64_t chunk = (capacity_ + num_workers) / num_workers;
-                  uint64_t pos_start = 1 + i * chunk;
-                  uint64_t pos_end = std::min(static_cast<uint64_t>(capacity_ + 1), pos_start + chunk);
-                  
-                  for (uint64_t pos = pos_start; pos < pos_end; ++pos) {
-                      uint64_t current_pos = impl_->pos_map[pos];
-                      uint64_t next_pos = current_pos;
-                      for (size_t j = 0; j < B; ++j) {
-                          bool match = flat_is_real[j] & sn::obliv::ct_eq<uint64_t>(pos, flat_keys[j]);
-                          next_pos = sn::obliv::ct_select<uint64_t>(batch_new_leaves[j], next_pos, match);
-                      }
-                      impl_->pos_map[pos] = next_pos; // Safe to write because chunks are thread-isolated!
-                  }
-              });
-          }
-          for (auto& w : workers) w.join();
-      }
-
       // 3. Chunked Stash Insertion
       // Increased chunk size to take advantage of larger disjoint epoch window
       size_t chunk_size = 768; 
@@ -780,7 +637,7 @@ void SonicORamAdapter::InsertBatch(std::vector<static_path_oram::Block>& blocks,
           for (size_t j = chunk_start; j < chunk_end; ++j) {
               uint64_t k = blocks[j].meta_.key_;
               bool real = (!sn::obliv::ct_eq<uint64_t>(k, 0));
-              uint64_t leaf = batch_new_leaves[j];
+              uint64_t leaf = blocks[j].meta_.pos_ - 1;
               
               thread_local std::array<uint8_t, kSonicBlockBytes> in_buf;
               std::fill(in_buf.begin(), in_buf.end(), 0);
@@ -805,9 +662,6 @@ void SonicORamAdapter::InsertBatch(std::vector<static_path_oram::Block>& blocks,
               
               impl_->client->insert(new_block);
           }
-          
-          // Unconditional flush guarantees it will never disjoint window crash
-          impl_->client->flush_epoch();
       }
       return;
   }

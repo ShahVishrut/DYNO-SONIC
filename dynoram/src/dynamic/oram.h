@@ -46,6 +46,8 @@ class ORam {
     Block result; // For Search
     int8_t sub_oram_idx = -1;
     uint64_t phys_k = 0;
+    uint64_t cur_leaf = 0;
+    uint64_t new_leaf = 0;
   };
 
   void ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key, bool steady_state = true);
@@ -72,7 +74,11 @@ class ORam {
   const size_t val_len_;
   size_t size_ = 0;
   std::array<std::unique_ptr<PORam>, 2> sub_orams_{};
-  std::vector<uint64_t> log_map_[2];
+  struct LogEntry {
+      uint64_t logical_key;
+      uint64_t leaf;
+  };
+  std::vector<LogEntry> log_map_[2];
   uint64_t memory_access_count_ = 0;
   uint64_t memory_bytes_moved_total_ = 0;
   uint64_t SubORamsMemoryAccessCountSum();

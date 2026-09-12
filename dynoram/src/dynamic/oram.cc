@@ -12,6 +12,7 @@
 #include <iostream>
 #include <thread>
 #include <vector>
+#include <immintrin.h>
 
 #include "src/utils/crypto.h"
 #include "sonic/obliv/ops/core_ops.hpp"
@@ -31,10 +32,10 @@ ORam::ORam(int starting_size_power_of_two, size_t val_len)
       val_len_(val_len),
       size_(1UL << (starting_size_power_of_two)) {
   auto base_cap = capacity_;
-  sub_orams_[0] = std::make_unique<PORam>(base_cap, val_len, true);
-  sub_orams_[1] = std::make_unique<PORam>(base_cap * 2, val_len, true);
-  log_map_[0].resize(base_cap + 1, 0);
-  log_map_[1].resize((base_cap * 2) + 1, 0);
+  sub_orams_[0] = std::make_unique<PORam>(base_cap, val_len, false);
+  sub_orams_[1] = std::make_unique<PORam>(base_cap * 2, val_len, false);
+  log_map_[0].resize(base_cap + 1, {0, 0});
+  log_map_[1].resize((base_cap * 2) + 1, {0, 0});
 }
 
 bool IsPowerOfTwo(size_t x) {
@@ -88,7 +89,7 @@ void ORam::Grow(crypto::Key enc_key) {
     
     log_map_[0] = std::move(log_map_[1]);
     log_map_[1].clear();
-    log_map_[1].resize((2 * capacity_) + 1, 0);
+    log_map_[1].resize((2 * capacity_) + 1, {0, 0});
   }
 
   assert(sub_orams_[0] != nullptr && sub_orams_[1] != nullptr);
@@ -122,9 +123,10 @@ Block ORam::ReadAndRemove(Key k, crypto::Key enc_key) {
     uint64_t cap = (i == 0) ? cap_S : cap_L;
     uint64_t phys_k = 0;
     for (uint64_t j = 1; j <= cap; ++j) {
-        bool match = sn::obliv::ct_eq(static_cast<uint64_t>(k), log_map_[i][j]);
+        bool match = sn::obliv::ct_eq(static_cast<uint64_t>(k), log_map_[i][j].logical_key);
         phys_k = sn::obliv::ct_select<uint64_t>(j, phys_k, match);
-        log_map_[i][j] = sn::obliv::ct_select<uint64_t>(0, log_map_[i][j], match);
+        log_map_[i][j].logical_key = sn::obliv::ct_select<uint64_t>(0, log_map_[i][j].logical_key, match);
+        log_map_[i][j].leaf = sn::obliv::ct_select<uint64_t>(0, log_map_[i][j].leaf, match);
     }
     
     bool is_real = (phys_k != 0);
@@ -160,7 +162,7 @@ Block ORam::Read(Key k, crypto::Key enc_key) {
     uint64_t cap = (i == 0) ? cap_S : cap_L;
     uint64_t phys_k = 0;
     for (uint64_t j = 1; j <= cap; ++j) {
-        bool match = sn::obliv::ct_eq(static_cast<uint64_t>(k), log_map_[i][j]);
+        bool match = sn::obliv::ct_eq(static_cast<uint64_t>(k), log_map_[i][j].logical_key);
         phys_k = sn::obliv::ct_select<uint64_t>(j, phys_k, match);
     }
     
@@ -187,10 +189,11 @@ void ORam::Insert(Key k, Val v, crypto::Key enc_key) {
   
   uint64_t phys_k = 0;
   for (uint64_t i = 1; i <= cap_L; ++i) {
-      bool is_empty = (log_map_[1][i] == 0);
+      bool is_empty = (log_map_[1][i].logical_key == 0);
       bool select_this = is_empty && (phys_k == 0);
       phys_k = sn::obliv::ct_select<uint64_t>(i, phys_k, select_this);
-      log_map_[1][i] = sn::obliv::ct_select<uint64_t>(k, log_map_[1][i], select_this);
+      log_map_[1][i].logical_key = sn::obliv::ct_select<uint64_t>(k, log_map_[1][i].logical_key, select_this);
+      log_map_[1][i].leaf = sn::obliv::ct_select<uint64_t>(0, log_map_[1][i].leaf, select_this);
   }
   
   for (int i = 0; i < 2; ++i) {
@@ -393,13 +396,14 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
       if (cap > 0) {
           std::vector<O2TH::data_query> queries(cap);
           for (size_t i = 1; i <= cap; ++i) {
-              uint64_t log_k = log_map_[idx][i];
+              uint64_t log_k = log_map_[idx][i].logical_key;
+              uint64_t cur_leaf = log_map_[idx][i].leaf;
               bool is_real = !sn::obliv::ct_eq<uint64_t>(log_k, 0);
               
               std::array<uint8_t, 16> payload = {0};
-              std::memcpy(payload.data(), &i, sizeof(uint64_t));
-              int8_t sub_idx = static_cast<int8_t>(idx);
-              std::memcpy(payload.data() + 8, &sub_idx, sizeof(int8_t));
+              uint64_t packed = (i & 0x00FFFFFFFFFFFFFFULL) | (static_cast<uint64_t>(static_cast<uint8_t>(idx)) << 56);
+              std::memcpy(payload.data(), &packed, 8);
+              std::memcpy(payload.data() + 8, &cur_leaf, 8);
               
               queries[i-1].assign(sn::obliv::ct_select<uint64_t>(log_k, 0, is_real), payload, true);
           }
@@ -426,7 +430,13 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
       uint32_t batch_idx;
       uint64_t phys_k;
       int8_t sub_idx;
+      uint64_t cur_leaf;
+      uint64_t new_leaf;
   };
+
+  std::mt19937_64 rng_leaf(42);
+  uint64_t num_leaves_S = sub_orams_[0] ? sub_orams_[0]->Capacity() : 0;
+  uint64_t num_leaves_L = sub_orams_[1] ? sub_orams_[1]->Capacity() : 0;
 
   std::vector<JoinElement> join_arr(2 * B);
   for (size_t i = 0; i < B; ++i) {
@@ -434,18 +444,34 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
       join_arr[i].sort_key = sn::obliv::ct_select<uint32_t>(UINT32_MAX, retrieve_data[i].value.extra_data, is_dummy_update);
       join_arr[i].is_target = false;
       join_arr[i].batch_idx = 0;
-      uint64_t phys_k = 0;
-      int8_t sub_idx = -1;
-      std::memcpy(&phys_k, retrieve_data[i].value.data.data(), sizeof(uint64_t));
-      std::memcpy(&sub_idx, retrieve_data[i].value.data.data() + 8, sizeof(int8_t));
+      
+      uint64_t packed = 0;
+      uint64_t cur_leaf = 0;
+      std::memcpy(&packed, retrieve_data[i].value.data.data(), 8);
+      std::memcpy(&cur_leaf, retrieve_data[i].value.data.data() + 8, 8);
+      
+      uint64_t phys_k = packed & 0x00FFFFFFFFFFFFFFULL;
+      int8_t sub_idx = static_cast<int8_t>(packed >> 56);
+      
+      uint64_t num_leaves = (sub_idx == 0) ? num_leaves_S : num_leaves_L;
+      uint64_t new_leaf = (num_leaves > 0 && sub_idx >= 0) ? (rng_leaf() % num_leaves) : 0;
+      
+      if (!is_dummy_update && sub_idx >= 0 && phys_k > 0) {
+          log_map_[sub_idx][phys_k].leaf = new_leaf;
+      }
+
       join_arr[i].phys_k = phys_k;
       join_arr[i].sub_idx = sub_idx;
+      join_arr[i].cur_leaf = cur_leaf;
+      join_arr[i].new_leaf = new_leaf;
 
       join_arr[B + i].sort_key = static_cast<uint32_t>(i);
       join_arr[B + i].is_target = true;
       join_arr[B + i].batch_idx = static_cast<uint32_t>(i);
       join_arr[B + i].phys_k = 0;
       join_arr[B + i].sub_idx = -1;
+      join_arr[B + i].cur_leaf = 0;
+      join_arr[B + i].new_leaf = 0;
   }
 
   auto comp_join1 = [](const JoinElement& a, const JoinElement& b) {
@@ -460,13 +486,19 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
 
   uint64_t cur_phys_k = 0;
   int8_t cur_sub_idx = -1;
+  uint64_t current_cur_leaf = 0;
+  uint64_t current_new_leaf = 0;
   for (size_t i = 0; i < 2 * B; ++i) {
       bool is_update = !join_arr[i].is_target;
       cur_phys_k = sn::obliv::ct_select<uint64_t>(join_arr[i].phys_k, cur_phys_k, is_update);
       cur_sub_idx = sn::obliv::ct_select<int8_t>(join_arr[i].sub_idx, cur_sub_idx, is_update);
+      current_cur_leaf = sn::obliv::ct_select<uint64_t>(join_arr[i].cur_leaf, current_cur_leaf, is_update);
+      current_new_leaf = sn::obliv::ct_select<uint64_t>(join_arr[i].new_leaf, current_new_leaf, is_update);
       
       join_arr[i].phys_k = sn::obliv::ct_select<uint64_t>(cur_phys_k, join_arr[i].phys_k, join_arr[i].is_target);
       join_arr[i].sub_idx = sn::obliv::ct_select<int8_t>(cur_sub_idx, join_arr[i].sub_idx, join_arr[i].is_target);
+      join_arr[i].cur_leaf = sn::obliv::ct_select<uint64_t>(current_cur_leaf, join_arr[i].cur_leaf, join_arr[i].is_target);
+      join_arr[i].new_leaf = sn::obliv::ct_select<uint64_t>(current_new_leaf, join_arr[i].new_leaf, join_arr[i].is_target);
   }
 
   auto comp_join2 = [](const JoinElement& a, const JoinElement& b) {
@@ -484,18 +516,43 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
   for (size_t i = 0; i < B; ++i) {
       batch[elems[i].seq].phys_k = join_arr[i].phys_k;
       batch[elems[i].seq].sub_oram_idx = join_arr[i].sub_idx;
+      batch[elems[i].seq].cur_leaf = join_arr[i].cur_leaf;
+      batch[elems[i].seq].new_leaf = join_arr[i].new_leaf;
   }
 
   uint64_t fw_phys_k = 0;
   int8_t fw_sub_idx = -1;
+  uint64_t fw_cur_leaf = 0;
+  uint64_t fw_new_leaf = 0;
   for (size_t i = 0; i < B; ++i) {
       bool is_first = (i == 0) || !sn::obliv::ct_eq(elems[i].key, elems[i-1].key);
       fw_phys_k = sn::obliv::ct_select<uint64_t>(batch[elems[i].seq].phys_k, fw_phys_k, is_first);
       fw_sub_idx = sn::obliv::ct_select<int8_t>(batch[elems[i].seq].sub_oram_idx, fw_sub_idx, is_first);
+      fw_cur_leaf = sn::obliv::ct_select<uint64_t>(batch[elems[i].seq].cur_leaf, fw_cur_leaf, is_first);
+      fw_new_leaf = sn::obliv::ct_select<uint64_t>(batch[elems[i].seq].new_leaf, fw_new_leaf, is_first);
       
       batch[elems[i].seq].phys_k = fw_phys_k;
       batch[elems[i].seq].sub_oram_idx = fw_sub_idx;
+      batch[elems[i].seq].cur_leaf = fw_cur_leaf;
+      batch[elems[i].seq].new_leaf = fw_new_leaf;
   }
+
+  auto simd_select_56 = [](uint8_t* dest, const uint8_t* a, const uint8_t* b, bool cond) {
+#if defined(__AVX2__)
+      __m256i mask = _mm256_set1_epi8(cond ? 0xFF : 0x00);
+      __m256i a1 = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(a));
+      __m256i b1 = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(b));
+      __m256i r1 = _mm256_blendv_epi8(b1, a1, mask);
+      _mm256_storeu_si256(reinterpret_cast<__m256i*>(dest), r1);
+
+      __m256i a2 = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(a + 24));
+      __m256i b2 = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(b + 24));
+      __m256i r2 = _mm256_blendv_epi8(b2, a2, mask);
+      _mm256_storeu_si256(reinterpret_cast<__m256i*>(dest + 24), r2);
+#else
+      sn::obliv::ct_select_array(dest, a, b, 56, cond);
+#endif
+  };
 
   std::cout << "[DYNO] Phase 3: O-Scan (Collapse) starting..." << std::endl;
   
@@ -523,7 +580,8 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
       
       bool is_write = is_insert | is_update;
       if (val_len_ > 0) {
-          sn::obliv::ct_select_array(current_payload.data(), batch[elems[i].seq].val.get(), current_payload.data(), val_len_, is_write);
+          if (val_len_ == 56) simd_select_56(current_payload.data(), batch[elems[i].seq].val.get(), current_payload.data(), is_write);
+          else sn::obliv::ct_select_array(current_payload.data(), batch[elems[i].seq].val.get(), current_payload.data(), val_len_, is_write);
       }
       has_payload = has_payload | is_write;
       
@@ -533,7 +591,8 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
       // Forward latest payload to searches
       bool forward_to_search = is_search & has_payload & !is_deleted;
       if (val_len_ > 0) {
-          sn::obliv::ct_select_array(batch[elems[i].seq].result.val_.get(), current_payload.data(), batch[elems[i].seq].result.val_.get(), val_len_, forward_to_search);
+          if (val_len_ == 56) simd_select_56(batch[elems[i].seq].result.val_.get(), current_payload.data(), batch[elems[i].seq].result.val_.get(), forward_to_search);
+          else sn::obliv::ct_select_array(batch[elems[i].seq].result.val_.get(), current_payload.data(), batch[elems[i].seq].result.val_.get(), val_len_, forward_to_search);
       }
       batch[elems[i].seq].result.key_ = sn::obliv::ct_select<uint64_t>(1, batch[elems[i].seq].result.key_, forward_to_search);
       
@@ -569,7 +628,8 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
       
       bool captures_payload = is_write & !has_future_write;
       if (val_len_ > 0) {
-          sn::obliv::ct_select_array(backward_payload.data(), batch[elems[i].seq].val.get(), backward_payload.data(), val_len_, captures_payload);
+          if (val_len_ == 56) simd_select_56(backward_payload.data(), batch[elems[i].seq].val.get(), backward_payload.data(), captures_payload);
+          else sn::obliv::ct_select_array(backward_payload.data(), batch[elems[i].seq].val.get(), backward_payload.data(), val_len_, captures_payload);
       }
       
       bool survives_insert = is_insert & !has_future_insert & !has_future_delete;
@@ -580,7 +640,8 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
       
       if (val_len_ > 0) {
           bool receives_payload = is_real & is_write;
-          sn::obliv::ct_select_array(batch[elems[i].seq].val.get(), backward_payload.data(), batch[elems[i].seq].val.get(), val_len_, receives_payload);
+          if (val_len_ == 56) simd_select_56(batch[elems[i].seq].val.get(), backward_payload.data(), batch[elems[i].seq].val.get(), receives_payload);
+          else sn::obliv::ct_select_array(batch[elems[i].seq].val.get(), backward_payload.data(), batch[elems[i].seq].val.get(), val_len_, receives_payload);
       }
       
       has_future_write = has_future_write | is_write;
@@ -609,22 +670,31 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
   }
 
   // Allocate empty slots for REAL Inserts in S_large
+  std::vector<uint64_t> free_slots;
+  free_slots.reserve(B);
+  for (uint64_t j = 1; j <= cap_L && free_slots.size() < B; ++j) {
+      if (log_map_[1][j].logical_key == 0) free_slots.push_back(j);
+  }
+
+  size_t free_idx = 0;
   for (size_t i = 0; i < B; ++i) {
       uint32_t orig_idx = elems[i].seq;
       bool is_real = !elems[i].is_dummy;
       bool is_insert = sn::obliv::ct_eq(elems[i].op_type, static_cast<uint8_t>(OpType::Insert));
       bool needs_slot = is_real && is_insert;
       
-      uint64_t assigned_slot = 0;
-      for (uint64_t j = 1; j <= cap_L; ++j) {
-          bool is_empty = (log_map_[1][j] == 0);
-          bool select_this = is_empty && (assigned_slot == 0) && needs_slot;
-          assigned_slot = sn::obliv::ct_select<uint64_t>(j, assigned_slot, select_this);
-          log_map_[1][j] = sn::obliv::ct_select<uint64_t>(elems[i].key, log_map_[1][j], select_this);
+      if (needs_slot) {
+          uint64_t assigned_slot = free_slots[free_idx++];
+          uint64_t initial_leaf = rng_leaf() % num_leaves_L;
+          
+          log_map_[1][assigned_slot].logical_key = elems[i].key;
+          log_map_[1][assigned_slot].leaf = initial_leaf;
+          
+          batch[orig_idx].sub_oram_idx = 1;
+          batch[orig_idx].phys_k = assigned_slot;
+          batch[orig_idx].cur_leaf = 0; // Not in tree yet
+          batch[orig_idx].new_leaf = initial_leaf;
       }
-      
-      batch[orig_idx].sub_oram_idx = sn::obliv::ct_select<int8_t>(1, batch[orig_idx].sub_oram_idx, needs_slot);
-      batch[orig_idx].phys_k = sn::obliv::ct_select<uint64_t>(assigned_slot, batch[orig_idx].phys_k, needs_slot);
   }
 
   std::cout << "[DYNO] Phase 4: O-Sort (Group by OpType) starting..." << std::endl;
@@ -736,9 +806,11 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
           uint8_t idx = batch[orig_idx].sub_oram_idx;
           uint64_t phys_k = batch[orig_idx].phys_k;
           if (idx == 0 && phys_k > 0 && phys_k < log_map_[0].size()) {
-              log_map_[0][phys_k] = 0;
+              log_map_[0][phys_k].logical_key = 0;
+              log_map_[0][phys_k].leaf = 0;
           } else if (idx == 1 && phys_k > 0 && phys_k < log_map_[1].size()) {
-              log_map_[1][phys_k] = 0;
+              log_map_[1][phys_k].logical_key = 0;
+              log_map_[1][phys_k].leaf = 0;
           }
       }
   }
@@ -865,34 +937,42 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
         uint64_t old_phys_k_0 = Buffer_0[i].meta_.key_;
         bool is_valid_0 = transfer_up && (old_phys_k_0 != 0);
         uint64_t log_k_0 = 0;
+        uint64_t leaf_0 = 0;
         for (uint64_t j = 1; j <= cap_S; ++j) {
             bool match = is_valid_0 && sn::obliv::ct_eq(j, old_phys_k_0);
-            log_k_0 = sn::obliv::ct_select(log_map_[0][j], log_k_0, match);
-            log_map_[0][j] = sn::obliv::ct_select<uint64_t>(0, log_map_[0][j], match);
+            log_k_0 = sn::obliv::ct_select(log_map_[0][j].logical_key, log_k_0, match);
+            leaf_0 = sn::obliv::ct_select(log_map_[0][j].leaf, leaf_0, match);
+            log_map_[0][j].logical_key = sn::obliv::ct_select<uint64_t>(0, log_map_[0][j].logical_key, match);
+            log_map_[0][j].leaf = sn::obliv::ct_select<uint64_t>(0, log_map_[0][j].leaf, match);
         }
         uint64_t new_phys_k_0 = 0;
         for (uint64_t j = 1; j <= cap_L; ++j) {
-            bool is_empty = (log_map_[1][j] == 0);
+            bool is_empty = (log_map_[1][j].logical_key == 0);
             bool select_this = is_valid_0 && is_empty && (new_phys_k_0 == 0);
             new_phys_k_0 = sn::obliv::ct_select(j, new_phys_k_0, select_this);
-            log_map_[1][j] = sn::obliv::ct_select(log_k_0, log_map_[1][j], select_this);
+            log_map_[1][j].logical_key = sn::obliv::ct_select(log_k_0, log_map_[1][j].logical_key, select_this);
+            log_map_[1][j].leaf = sn::obliv::ct_select(leaf_0, log_map_[1][j].leaf, select_this);
         }
         Buffer_0[i].meta_.key_ = sn::obliv::ct_select(new_phys_k_0, static_cast<uint64_t>(0), is_valid_0);
 
         uint64_t old_phys_k_1 = Buffer_1[i].meta_.key_;
         bool is_valid_1 = transfer_down && (old_phys_k_1 != 0);
         uint64_t log_k_1 = 0;
+        uint64_t leaf_1 = 0;
         for (uint64_t j = 1; j <= cap_L; ++j) {
             bool match = is_valid_1 && sn::obliv::ct_eq(j, old_phys_k_1);
-            log_k_1 = sn::obliv::ct_select(log_map_[1][j], log_k_1, match);
-            log_map_[1][j] = sn::obliv::ct_select<uint64_t>(0, log_map_[1][j], match);
+            log_k_1 = sn::obliv::ct_select(log_map_[1][j].logical_key, log_k_1, match);
+            leaf_1 = sn::obliv::ct_select(log_map_[1][j].leaf, leaf_1, match);
+            log_map_[1][j].logical_key = sn::obliv::ct_select<uint64_t>(0, log_map_[1][j].logical_key, match);
+            log_map_[1][j].leaf = sn::obliv::ct_select<uint64_t>(0, log_map_[1][j].leaf, match);
         }
         uint64_t new_phys_k_1 = 0;
         for (uint64_t j = 1; j <= cap_S; ++j) {
-            bool is_empty = (log_map_[0][j] == 0);
+            bool is_empty = (log_map_[0][j].logical_key == 0);
             bool select_this = is_valid_1 && is_empty && (new_phys_k_1 == 0);
             new_phys_k_1 = sn::obliv::ct_select(j, new_phys_k_1, select_this);
-            log_map_[0][j] = sn::obliv::ct_select(log_k_1, log_map_[0][j], select_this);
+            log_map_[0][j].logical_key = sn::obliv::ct_select(log_k_1, log_map_[0][j].logical_key, select_this);
+            log_map_[0][j].leaf = sn::obliv::ct_select(leaf_1, log_map_[0][j].leaf, select_this);
         }
         Buffer_1[i].meta_.key_ = sn::obliv::ct_select(new_phys_k_1, static_cast<uint64_t>(0), is_valid_1);
     }
@@ -914,7 +994,7 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
     
     log_map_[0] = std::move(log_map_[1]);
     log_map_[1].clear();
-    log_map_[1].resize((2 * old_y) + 1, 0);
+    log_map_[1].resize((2 * old_y) + 1, {0, 0});
     
     if (k_sec > 0) {
         auto no_filter = [](Key phys_k) { return true; };
@@ -932,18 +1012,22 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
             bool is_valid = (old_phys_k != 0);
             
             uint64_t log_k = 0;
+            uint64_t leaf_k = 0;
             for (uint64_t j = 1; j <= static_cast<uint64_t>(old_y); ++j) {
                 bool match = is_valid && sn::obliv::ct_eq(j, old_phys_k);
-                log_k = sn::obliv::ct_select(log_map_[0][j], log_k, match);
-                log_map_[0][j] = sn::obliv::ct_select<uint64_t>(0, log_map_[0][j], match);
+                log_k = sn::obliv::ct_select(log_map_[0][j].logical_key, log_k, match);
+                leaf_k = sn::obliv::ct_select(log_map_[0][j].leaf, leaf_k, match);
+                log_map_[0][j].logical_key = sn::obliv::ct_select<uint64_t>(0, log_map_[0][j].logical_key, match);
+                log_map_[0][j].leaf = sn::obliv::ct_select<uint64_t>(0, log_map_[0][j].leaf, match);
             }
             
             uint64_t new_phys_k = 0;
             for (uint64_t j = 1; j <= static_cast<uint64_t>(2 * old_y); ++j) {
-                bool is_empty = (log_map_[1][j] == 0);
+                bool is_empty = (log_map_[1][j].logical_key == 0);
                 bool select_this = is_valid && is_empty && (new_phys_k == 0);
                 new_phys_k = sn::obliv::ct_select(j, new_phys_k, select_this);
-                log_map_[1][j] = sn::obliv::ct_select(log_k, log_map_[1][j], select_this);
+                log_map_[1][j].logical_key = sn::obliv::ct_select(log_k, log_map_[1][j].logical_key, select_this);
+                log_map_[1][j].leaf = sn::obliv::ct_select(leaf_k, log_map_[1][j].leaf, select_this);
             }
             
             Buffer[i].meta_.key_ = new_phys_k;
@@ -960,7 +1044,7 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
     
     log_map_[1] = std::move(log_map_[0]);
     log_map_[0].clear();
-    log_map_[0].resize((old_x / 2) + 1, 0);
+    log_map_[0].resize((old_x / 2) + 1, {0, 0});
 
     if (k_sec > 0) {
         auto no_filter = [](Key phys_k) { return true; };
@@ -978,18 +1062,22 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
             bool is_valid = (old_phys_k != 0);
             
             uint64_t log_k = 0;
+            uint64_t leaf_k = 0;
             for (uint64_t j = 1; j <= static_cast<uint64_t>(old_x); ++j) {
                 bool match = is_valid && sn::obliv::ct_eq(j, old_phys_k);
-                log_k = sn::obliv::ct_select(log_map_[1][j], log_k, match);
-                log_map_[1][j] = sn::obliv::ct_select<uint64_t>(0, log_map_[1][j], match);
+                log_k = sn::obliv::ct_select(log_map_[1][j].logical_key, log_k, match);
+                leaf_k = sn::obliv::ct_select(log_map_[1][j].leaf, leaf_k, match);
+                log_map_[1][j].logical_key = sn::obliv::ct_select<uint64_t>(0, log_map_[1][j].logical_key, match);
+                log_map_[1][j].leaf = sn::obliv::ct_select<uint64_t>(0, log_map_[1][j].leaf, match);
             }
             
             uint64_t new_phys_k = 0;
             for (uint64_t j = 1; j <= static_cast<uint64_t>(old_x / 2); ++j) {
-                bool is_empty = (log_map_[0][j] == 0);
+                bool is_empty = (log_map_[0][j].logical_key == 0);
                 bool select_this = is_valid && is_empty && (new_phys_k == 0);
                 new_phys_k = sn::obliv::ct_select(j, new_phys_k, select_this);
-                log_map_[0][j] = sn::obliv::ct_select(log_k, log_map_[0][j], select_this);
+                log_map_[0][j].logical_key = sn::obliv::ct_select(log_k, log_map_[0][j].logical_key, select_this);
+                log_map_[0][j].leaf = sn::obliv::ct_select(leaf_k, log_map_[0][j].leaf, select_this);
             }
             
             Buffer[i].meta_.key_ = new_phys_k;
@@ -1001,6 +1089,9 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
   if (B > original_B) {
       batch.resize(original_B);
   }
+
+  if (sub_orams_[0]) sub_orams_[0]->FlushEpoch();
+  if (sub_orams_[1]) sub_orams_[1]->FlushEpoch();
 }
 
 } // namespace dyno::dynamic_stepping_path_oram
