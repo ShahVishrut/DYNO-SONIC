@@ -67,7 +67,7 @@ static size_t BucketSize(size_t val_len) {
   return sizeof(BucketMetadata) + (kBucketSize * BlockSize(val_len));
 }
 
-static size_t EncryptedBucketSize(size_t val_len) {
+inline size_t EncryptedBucketSize(size_t val_len) {
   return crypto::CiphertextLen(BucketSize(val_len));
 }
 

@@ -67,7 +67,7 @@ class Block {
   ORVal ToBytes(size_t val_len);
 };
 
-static size_t BlockSize(size_t val_len) {
+inline size_t BlockSize(size_t val_len) {
   return sizeof(BlockMetadata) + val_len;
 }
 

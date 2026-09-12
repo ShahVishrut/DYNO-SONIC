@@ -13,6 +13,7 @@
 #include <thread>
 #include <vector>
 #include <immintrin.h>
+#include <random>
 
 #include "src/utils/crypto.h"
 #include "sonic/obliv/ops/core_ops.hpp"
