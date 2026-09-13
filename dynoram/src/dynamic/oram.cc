@@ -1170,7 +1170,8 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
     int64_t k_sec = 2 * excess;
     
     sub_orams_[0] = std::move(sub_orams_[1]);
-    sub_orams_[1] = std::make_unique<PORam>(2 * old_y, val_len_, true);
+    // FIX: Pass false instead of true so we don't accidentally turn pos_map back on during Scale Up!
+    sub_orams_[1] = std::make_unique<PORam>(2 * old_y, val_len_, false);
     std::cout << "[DYNO_DEBUG] Phase 5 Scale Up. After swap: sub_orams_[0] capacity: " 
               << (sub_orams_[0] ? sub_orams_[0]->Capacity() : -1)
               << ", sub_orams_[1] capacity: " << (sub_orams_[1] ? sub_orams_[1]->Capacity() : -1) << std::endl;
