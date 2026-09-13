@@ -355,26 +355,21 @@ void SonicORamAdapter::FlushEpoch() {
   impl_->client->flush_epoch();
 }
 
-std::vector<static_path_oram::Block> SonicORamAdapter::ReadAndRemoveBatch(const std::vector<std::pair<static_path_oram::Key, bool>>& keys_with_real_flags, crypto::Key enc_key, bool steady_state) {
-  size_t B = keys_with_real_flags.size();
+std::vector<static_path_oram::Block> SonicORamAdapter::ReadAndRemoveBatch(const std::vector<AccessOp>& ops, crypto::Key enc_key, bool steady_state) {
+  size_t B = ops.size();
   std::vector<static_path_oram::Block> results;
   results.reserve(B);
-  for (size_t i = 0; i < B; ++i) {
-    results.emplace_back(true);
-  }
+  for (size_t i = 0; i < B; ++i) results.emplace_back(true);
 
-  std::vector<uint64_t> batch_cur_leaves(B, UINT64_MAX);
+  std::vector<uint64_t> batch_cur_leaves(B, 0);
   std::vector<uint64_t> batch_new_leaves(B, 0);
   
   for (size_t j = 0; j < B; ++j) {
+      batch_cur_leaves[j] = ops[j].cur_leaf;
       batch_new_leaves[j] = impl_->GenerateLeaf();
   }
 
   int num_workers = 24;
-  for (size_t j = 0; j < B; ++j) {
-      batch_cur_leaves[j] = sn::obliv::ct_select<uint64_t>(keys_with_real_flags[j].first - 1, impl_->GenerateLeaf(), keys_with_real_flags[j].second);
-  }
-
   std::call_once(g_pool_init_flag, [](){ g_access_pool = std::make_unique<ThreadPool>(24); });
 
   std::vector<uint64_t> thread_access_ops(num_workers, 0);
@@ -387,7 +382,7 @@ std::vector<static_path_oram::Block> SonicORamAdapter::ReadAndRemoveBatch(const 
       int tasks_pending = num_workers;
       
       for (int i = 0; i < num_workers; ++i) {
-          g_access_pool->enqueue([this, i, num_workers, chunk_start, chunk_end, &keys_with_real_flags, &batch_cur_leaves, &batch_new_leaves, &results, &thread_access_ops, &ops_mutex, &tasks_pending, &chunk_cv]() {
+          g_access_pool->enqueue([this, i, num_workers, chunk_start, chunk_end, &ops, &batch_cur_leaves, &batch_new_leaves, &results, &thread_access_ops, &ops_mutex, &tasks_pending, &chunk_cv]() {
               try {
                   thread_local SonicClient::access_scratch tl_scratch;
                   thread_local size_t tl_scratch_cap = 0;
@@ -397,9 +392,9 @@ std::vector<static_path_oram::Block> SonicORamAdapter::ReadAndRemoveBatch(const 
                   }
                   uint64_t local_ops = 0;
                   for (size_t j = chunk_start + i; j < chunk_end; j += num_workers) {
-                      auto& [k, is_real] = keys_with_real_flags[j];
+                      const auto& op = ops[j];
                       sn::oram::access_request req;
-                      req.address = sn::obliv::ct_select<uint64_t>(k - 1, UINT64_MAX, is_real);
+                      req.address = sn::obliv::ct_select<uint64_t>(op.key - 1, UINT64_MAX, op.is_real);
                       req.cur_leaf = batch_cur_leaves[j];
                       req.new_leaf = batch_new_leaves[j];
                       req.is_write = false; 
@@ -410,21 +405,19 @@ std::vector<static_path_oram::Block> SonicORamAdapter::ReadAndRemoveBatch(const 
                       req.out = sn::util::span<uint8_t>(out_buf);
 
                       auto pre_ops = impl_->client->state_ref().metrics_snapshot().access_ops;
-                      
-                      // NATIVE CONCURRENCY: The lock has been removed! SONIC handles this natively.
                       impl_->client->access(req, tl_scratch);
-                      
                       auto post_ops = impl_->client->state_ref().metrics_snapshot().access_ops;
                       local_ops += (post_ops - pre_ops);
 
                       static_path_oram::Block res(true);
                       if (val_len_ > 0) {
                           res.val_ = std::make_unique<uint8_t[]>(val_len_);
-                          size_t block_size = static_path_oram::BlockSize(val_len_);
-                          if (block_size <= kSonicBlockBytes) {
+                          size_t safe_val_len = kSonicBlockBytes > sizeof(static_path_oram::BlockMetadata) ? 
+                                                std::min(val_len_, kSonicBlockBytes - sizeof(static_path_oram::BlockMetadata)) : 0;
+                          if (safe_val_len > 0) {
                               bytes::FromBytes(out_buf.data(), res.meta_);
                               std::copy(out_buf.data() + sizeof(static_path_oram::BlockMetadata),
-                                        out_buf.data() + sizeof(static_path_oram::BlockMetadata) + val_len_,
+                                        out_buf.data() + sizeof(static_path_oram::BlockMetadata) + safe_val_len,
                                         res.val_.get());
                           }
                       }
@@ -433,17 +426,14 @@ std::vector<static_path_oram::Block> SonicORamAdapter::ReadAndRemoveBatch(const 
                           res.meta_.pos_ = batch_new_leaves[j] + 1;
                       }
                       
-                      res.meta_.key_ = sn::obliv::ct_select<uint64_t>(res.meta_.key_, 0, is_real);
-                      res.meta_.pos_ = sn::obliv::ct_select<uint64_t>(res.meta_.pos_, 0, is_real);
+                      res.meta_.key_ = sn::obliv::ct_select<uint64_t>(res.meta_.key_, 0, op.is_real);
+                      res.meta_.pos_ = sn::obliv::ct_select<uint64_t>(res.meta_.pos_, 0, op.is_real);
                       if (val_len_ > 0) {
                           std::vector<uint8_t> zeros(val_len_, 0);
-                          sn::obliv::ct_select_array(res.val_.get(), res.val_.get(), zeros.data(), val_len_, is_real);
+                          sn::obliv::ct_select_array(res.val_.get(), res.val_.get(), zeros.data(), val_len_, op.is_real);
                       }
-                      
                       results[j] = std::move(res);
                   }
-                  
-                  // Only lock ONCE per thread per chunk to update pending tasks
                   {
                       std::unique_lock<std::mutex> lock(ops_mutex);
                       thread_access_ops[i] += local_ops;
@@ -451,12 +441,11 @@ std::vector<static_path_oram::Block> SonicORamAdapter::ReadAndRemoveBatch(const 
                       if (tasks_pending == 0) chunk_cv.notify_one();
                   }
               } catch (const std::exception& e) {
-                  std::cerr << "[CRITICAL ERROR] Exception in ReadAndRemoveBatch pool thread: " << e.what() << std::endl;
+                  std::cerr << "[CRITICAL ERROR] ReadAndRemoveBatch thread: " << e.what() << std::endl;
                   std::terminate();
               }
           });
       }
-      
       std::unique_lock<std::mutex> lock(ops_mutex);
       chunk_cv.wait(lock, [&tasks_pending]{ return tasks_pending == 0; });
   }

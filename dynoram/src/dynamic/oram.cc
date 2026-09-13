@@ -860,6 +860,8 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
     
     SonicORamAdapter::AccessOp op;
     op.key = batch[orig_idx].phys_k;
+    op.cur_leaf = batch[orig_idx].cur_leaf;
+    op.new_leaf = batch[orig_idx].new_leaf;
     op.op_type = op_type;
     if (batch[orig_idx].val) {
       op.val = std::make_unique<uint8_t[]>(val_len_);
@@ -870,6 +872,8 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
 
     SonicORamAdapter::AccessOp op_l;
     op_l.key = batch[orig_idx].phys_k;
+    op_l.cur_leaf = batch[orig_idx].cur_leaf;
+    op_l.new_leaf = batch[orig_idx].new_leaf;
     op_l.op_type = op_type;
     if (batch[orig_idx].val) {
       op_l.val = std::make_unique<uint8_t[]>(val_len_);
@@ -1021,7 +1025,8 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
     while (T_pow2 < T) T_pow2 *= 2;
 
     auto extract_keys = [&](int sub_idx, int64_t k_count, int64_t T_count) {
-        std::vector<Key> S_keys(T_count, 0);
+        struct Extracted { Key k; uint64_t leaf; };
+        std::vector<Extracted> S_ext(T_count, {0, 0});
         uint64_t count = 0;
         uint64_t cap = (sub_idx == 0) ? cap_S : cap_L;
         for (uint64_t i = 1; i <= cap; ++i) {
@@ -1029,28 +1034,36 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
             bool take = is_real & (count < static_cast<uint64_t>(k_count));
             for (uint64_t j = 0; j < static_cast<uint64_t>(T_count); ++j) {
                 bool match = take & (count == j);
-                S_keys[j] = sn::obliv::ct_select<Key>(i, S_keys[j], match);
+                S_ext[j].k = sn::obliv::ct_select<Key>(i, S_ext[j].k, match);
+                S_ext[j].leaf = sn::obliv::ct_select<uint64_t>(log_map_[sub_idx][i].leaf, S_ext[j].leaf, match);
             }
             count = sn::obliv::ct_select(count + 1, count, take);
         }
-        return S_keys;
+        return S_ext;
     };
     
     bool transfer_up = sn::obliv::ct_gt(k_transfer, static_cast<int64_t>(0));
     bool transfer_down = sn::obliv::ct_lt(k_transfer, static_cast<int64_t>(0));
     int64_t abs_k_transfer = sn::obliv::ct_select(-k_transfer, k_transfer, transfer_down);
     
-    std::vector<Key> extracted_0 = extract_keys(0, abs_k_transfer, T);
-    std::vector<Key> extracted_1 = extract_keys(1, abs_k_transfer, T);
+    auto extracted_0 = extract_keys(0, abs_k_transfer, T);
+    auto extracted_1 = extract_keys(1, abs_k_transfer, T);
     
-    std::vector<std::pair<Key, bool>> keys_to_read_0(T), keys_to_read_1(T);
+    std::vector<SonicORamAdapter::AccessOp> ops_to_read_0(T), ops_to_read_1(T);
     for (int64_t i = 0; i < T; ++i) {
-        keys_to_read_0[i] = {extracted_0[i], transfer_up && extracted_0[i] != 0};
-        keys_to_read_1[i] = {extracted_1[i], transfer_down && extracted_1[i] != 0};
+        ops_to_read_0[i].key = extracted_0[i].k;
+        ops_to_read_0[i].cur_leaf = extracted_0[i].leaf;
+        ops_to_read_0[i].is_real = transfer_up && extracted_0[i].k != 0;
+        ops_to_read_0[i].op_type = static_cast<uint8_t>(OpType::Delete);
+
+        ops_to_read_1[i].key = extracted_1[i].k;
+        ops_to_read_1[i].cur_leaf = extracted_1[i].leaf;
+        ops_to_read_1[i].is_real = transfer_down && extracted_1[i].k != 0;
+        ops_to_read_1[i].op_type = static_cast<uint8_t>(OpType::Delete);
     }
 
-    std::vector<static_path_oram::Block> Buffer_0 = sub_orams_[0]->ReadAndRemoveBatch(keys_to_read_0, enc_key);
-    std::vector<static_path_oram::Block> Buffer_1 = sub_orams_[1]->ReadAndRemoveBatch(keys_to_read_1, enc_key);
+    std::vector<static_path_oram::Block> Buffer_0 = sub_orams_[0]->ReadAndRemoveBatch(ops_to_read_0, enc_key);
+    std::vector<static_path_oram::Block> Buffer_1 = sub_orams_[1]->ReadAndRemoveBatch(ops_to_read_1, enc_key);
     
     for (int64_t i = T; i < T_pow2; ++i) {
         Buffer_0.emplace_back(true);
@@ -1131,29 +1144,35 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
     log_map_[1].resize((2 * old_y) + 1, {0, 0});
     
     if (k_sec > 0) {
-        auto extract_keys_sec = [&](int sub_idx, int64_t k_count, int64_t T_count) {
-            std::vector<Key> S_keys(T_count, 0);
+        auto extract_keys_sec = [&](int sub_idx, int64_t k_count, int64_t T_count, uint64_t cap) {
+            struct Extracted { Key k; uint64_t leaf; };
+            std::vector<Extracted> S_ext(T_count, {0, 0});
             uint64_t count = 0;
-            uint64_t cap = static_cast<uint64_t>(old_y); // the old sub_orams_[1] which is now sub_orams_[0]
             for (uint64_t i = 1; i <= cap; ++i) {
                 bool is_real = (log_map_[sub_idx][i].logical_key != 0);
                 bool take = is_real & (count < static_cast<uint64_t>(k_count));
                 for (uint64_t j = 0; j < static_cast<uint64_t>(T_count); ++j) {
                     bool match = take & (count == j);
-                    S_keys[j] = sn::obliv::ct_select<Key>(i, S_keys[j], match);
+                    S_ext[j].k = sn::obliv::ct_select<Key>(i, S_ext[j].k, match);
+                    S_ext[j].leaf = sn::obliv::ct_select<uint64_t>(log_map_[sub_idx][i].leaf, S_ext[j].leaf, match);
                 }
                 count = sn::obliv::ct_select(count + 1, count, take);
             }
-            return S_keys;
+            return S_ext;
         };
-        std::vector<Key> extracted = extract_keys_sec(0, k_sec, k_sec);
+        auto extracted = extract_keys_sec(0, k_sec, k_sec, old_y);
         
-        std::vector<std::pair<Key, bool>> keys_to_read;
+        std::vector<SonicORamAdapter::AccessOp> ops_to_read;
         for (int64_t i = 0; i < k_sec; ++i) {
-            keys_to_read.push_back({extracted[i], extracted[i] != 0});
+            SonicORamAdapter::AccessOp op;
+            op.key = extracted[i].k;
+            op.cur_leaf = extracted[i].leaf;
+            op.is_real = extracted[i].k != 0;
+            op.op_type = static_cast<uint8_t>(OpType::Delete);
+            ops_to_read.push_back(std::move(op));
         }
         
-        std::vector<static_path_oram::Block> Buffer = sub_orams_[0]->ReadAndRemoveBatch(keys_to_read, enc_key);
+        std::vector<static_path_oram::Block> Buffer = sub_orams_[0]->ReadAndRemoveBatch(ops_to_read, enc_key);
         
         for (int64_t i = 0; i < k_sec; ++i) {
             uint64_t old_phys_k = Buffer[i].meta_.key_;
@@ -1189,22 +1208,45 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
     int64_t k_sec = deficit;
     
     sub_orams_[1] = std::move(sub_orams_[0]);
-    sub_orams_[0] = std::make_unique<PORam>(old_x / 2, val_len_, true);
+    // FIX: Pass false instead of true so we don't accidentally turn pos_map back on!
+    sub_orams_[0] = std::make_unique<PORam>(old_x / 2, val_len_, false); 
     
     log_map_[1] = std::move(log_map_[0]);
     log_map_[0].clear();
     log_map_[0].resize((old_x / 2) + 1, {0, 0});
 
     if (k_sec > 0) {
-        auto no_filter = [](Key phys_k) { return true; };
-        std::vector<Key> extracted = sub_orams_[1]->ObliviousExtractValidKeys(k_sec, k_sec, no_filter);
+        auto extract_keys_sec = [&](int sub_idx, int64_t k_count, int64_t T_count, uint64_t cap) {
+            struct Extracted { Key k; uint64_t leaf; };
+            std::vector<Extracted> S_ext(T_count, {0, 0});
+            uint64_t count = 0;
+            for (uint64_t i = 1; i <= cap; ++i) {
+                bool is_real = (log_map_[sub_idx][i].logical_key != 0);
+                bool take = is_real & (count < static_cast<uint64_t>(k_count));
+                for (uint64_t j = 0; j < static_cast<uint64_t>(T_count); ++j) {
+                    bool match = take & (count == j);
+                    S_ext[j].k = sn::obliv::ct_select<Key>(i, S_ext[j].k, match);
+                    S_ext[j].leaf = sn::obliv::ct_select<uint64_t>(log_map_[sub_idx][i].leaf, S_ext[j].leaf, match);
+                }
+                count = sn::obliv::ct_select(count + 1, count, take);
+            }
+            return S_ext;
+        };
         
-        std::vector<std::pair<Key, bool>> keys_to_read;
+        auto extracted = extract_keys_sec(1, k_sec, k_sec, old_x);
+        
+        std::vector<SonicORamAdapter::AccessOp> ops_to_read;
         for (int64_t i = 0; i < k_sec; ++i) {
-            keys_to_read.push_back({extracted[i], extracted[i] != 0});
+            SonicORamAdapter::AccessOp op;
+            op.key = extracted[i].k;
+            op.cur_leaf = extracted[i].leaf;
+            op.new_leaf = 0; // Dummy new leaf, block is being removed anyway
+            op.is_real = extracted[i].k != 0;
+            op.op_type = static_cast<uint8_t>(OpType::Delete);
+            ops_to_read.push_back(std::move(op));
         }
         
-        std::vector<static_path_oram::Block> Buffer = sub_orams_[1]->ReadAndRemoveBatch(keys_to_read, enc_key);
+        std::vector<static_path_oram::Block> Buffer = sub_orams_[1]->ReadAndRemoveBatch(ops_to_read, enc_key);
         
         for (int64_t i = 0; i < k_sec; ++i) {
             uint64_t old_phys_k = Buffer[i].meta_.key_;
