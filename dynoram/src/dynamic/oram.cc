@@ -714,6 +714,10 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
       
       std::array<uint8_t, 16> payload = {0};
       uint64_t logical_key = elems[i].key;
+      
+      uint64_t new_insert_leaf = sub_orams_[1] ? sub_orams_[1]->GenerateRandomLeaf() - 1 : 0;
+      batch[orig_idx].new_leaf = sn::obliv::ct_select(new_insert_leaf, batch[orig_idx].new_leaf, needs_slot);
+      
       uint64_t leaf_to_write = batch[orig_idx].new_leaf;
       std::memcpy(payload.data(), &logical_key, sizeof(uint64_t));
       std::memcpy(payload.data() + 8, &leaf_to_write, sizeof(uint64_t));
