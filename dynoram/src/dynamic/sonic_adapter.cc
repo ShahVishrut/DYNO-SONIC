@@ -384,7 +384,7 @@ std::vector<static_path_oram::Block> SonicORamAdapter::ReadAndRemoveBatch(const 
                   for (size_t j = chunk_start + i; j < chunk_end; j += num_workers) {
                       const auto& op = ops[j];
                       sn::oram::access_request req;
-                      req.address = sn::obliv::ct_select<uint64_t>(op.key - 1, UINT64_MAX, op.is_real);
+                      req.address = sn::obliv::ct_select<uint64_t>(UINT64_MAX, op.key - 1, op.is_real);
                       req.cur_leaf = batch_cur_leaves[j];
                       req.new_leaf = batch_new_leaves[j];
                       req.is_write = false; 
@@ -519,7 +519,7 @@ std::vector<static_path_oram::Block> SonicORamAdapter::ReadBatch(const std::vect
                   for (size_t j = chunk_start + i; j < chunk_end; j += num_workers) {
                       const auto& op = ops[j];
                       sn::oram::access_request req;
-                      req.address = sn::obliv::ct_select<uint64_t>(op.key - 1, UINT64_MAX, op.is_real);
+                      req.address = sn::obliv::ct_select<uint64_t>(UINT64_MAX, op.key - 1, op.is_real);
                       req.cur_leaf = batch_cur_leaves[j];
                       req.new_leaf = batch_new_leaves[j];
                       bool is_update = sn::obliv::ct_eq<uint8_t>(op.op_type, 1);
