@@ -872,28 +872,30 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
     
     bool is_access = is_search || is_delete || is_update;
     
+    bool is_small_real = is_real && is_access && (idx == 0);
     SonicORamAdapter::AccessOp op;
-    op.key = batch[orig_idx].phys_k;
-    op.cur_leaf = batch[orig_idx].cur_leaf;
-    op.new_leaf = batch[orig_idx].new_leaf;
+    op.key = sn::obliv::ct_select<uint64_t>(batch[orig_idx].phys_k, 0, is_small_real);
+    op.cur_leaf = sn::obliv::ct_select<uint64_t>(batch[orig_idx].cur_leaf, 0, is_small_real);
+    op.new_leaf = sn::obliv::ct_select<uint64_t>(batch[orig_idx].new_leaf, 0, is_small_real);
     op.op_type = op_type;
     if (batch[orig_idx].val) {
       op.val = std::make_unique<uint8_t[]>(val_len_);
       std::copy(batch[orig_idx].val.get(), batch[orig_idx].val.get() + val_len_, op.val.get());
     }
-    op.is_real = is_real && is_access && (idx == 0);
+    op.is_real = is_small_real;
     small_ops.push_back(std::move(op));
 
+    bool is_large_real = is_real && is_access && (idx == 1);
     SonicORamAdapter::AccessOp op_l;
-    op_l.key = batch[orig_idx].phys_k;
-    op_l.cur_leaf = batch[orig_idx].cur_leaf;
-    op_l.new_leaf = batch[orig_idx].new_leaf;
+    op_l.key = sn::obliv::ct_select<uint64_t>(batch[orig_idx].phys_k, 0, is_large_real);
+    op_l.cur_leaf = sn::obliv::ct_select<uint64_t>(batch[orig_idx].cur_leaf, 0, is_large_real);
+    op_l.new_leaf = sn::obliv::ct_select<uint64_t>(batch[orig_idx].new_leaf, 0, is_large_real);
     op_l.op_type = op_type;
     if (batch[orig_idx].val) {
       op_l.val = std::make_unique<uint8_t[]>(val_len_);
       std::copy(batch[orig_idx].val.get(), batch[orig_idx].val.get() + val_len_, op_l.val.get());
     }
-    op_l.is_real = is_real && is_access && (idx == 1);
+    op_l.is_real = is_large_real;
     large_ops.push_back(std::move(op_l));
   }
 
