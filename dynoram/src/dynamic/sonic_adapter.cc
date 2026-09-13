@@ -815,9 +815,6 @@ void SonicORamAdapter::InsertBatch(std::vector<static_path_oram::Block>& blocks,
 //       memory_bytes_moved_total_ += thread_access_ops[i] * kSonicBlockBytes * 2;
 //   }
 
-
-}
-
 uint64_t SonicORamAdapter::GenerateRandomLeaf() const {
   return impl_->GenerateLeaf() + 1; // Return 1-indexed leaf for the caller
 }
