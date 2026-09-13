@@ -6,6 +6,7 @@
 #include <vector>
 #include <execinfo.h>
 #include <cstdlib>
+#include <iostream>
 
 #include "sonic/obliv/ops/core_ops.hpp"
 #include "sonic/util/log.hpp"
@@ -24,6 +25,7 @@ public:
 
   // initialize and precompute auxiliary data
   void reset(u64 height, u64 fanout = 2) {
+    std::cout << "[DYNO_DEBUG] topology::reset: height=" << height << ", fanout=" << fanout << std::endl;
     sn::util::log::ensure(fanout > 0, "tree::topology: fanout must be positive");
     height_ = height;
     fanout_ = fanout;

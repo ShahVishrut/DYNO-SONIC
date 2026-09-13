@@ -1134,12 +1134,18 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
 
   // Phase 5: Simple Structural Scale Up/Down with Secondary Transfers
   if (scale_up) {
+    std::cout << "[DYNO_DEBUG] Phase 5 Scale Up. Before swap: sub_orams_[0] capacity: " 
+              << (sub_orams_[0] ? sub_orams_[0]->Capacity() : -1)
+              << ", sub_orams_[1] capacity: " << (sub_orams_[1] ? sub_orams_[1]->Capacity() : -1) << std::endl;
     int64_t old_y = sub_orams_[1]->Capacity();
     int64_t excess = std::max<int64_t>(0, static_cast<int64_t>(capacity_) - old_y);
     int64_t k_sec = 2 * excess;
     
     sub_orams_[0] = std::move(sub_orams_[1]);
     sub_orams_[1] = std::make_unique<PORam>(2 * old_y, val_len_, true);
+    std::cout << "[DYNO_DEBUG] Phase 5 Scale Up. After swap: sub_orams_[0] capacity: " 
+              << (sub_orams_[0] ? sub_orams_[0]->Capacity() : -1)
+              << ", sub_orams_[1] capacity: " << (sub_orams_[1] ? sub_orams_[1]->Capacity() : -1) << std::endl;
     
     log_map_[0] = std::move(log_map_[1]);
     log_map_[1].clear();

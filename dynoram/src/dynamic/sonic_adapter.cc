@@ -352,6 +352,9 @@ void SonicORamAdapter::Insert(static_path_oram::Block block, crypto::Key enc_key
 }
 
 void SonicORamAdapter::FlushEpoch() {
+  std::cout << "[DYNO_DEBUG] SonicORamAdapter::FlushEpoch() called. capacity_=" << capacity_ 
+            << ", disjoint_window=" << impl_->client->options().disjoint_epoch_window
+            << ", leaf_count=" << impl_->client->shape().leaf_count << std::endl;
   impl_->client->flush_epoch();
 }
 
