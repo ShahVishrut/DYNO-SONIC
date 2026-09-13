@@ -97,7 +97,11 @@ void ORam::Grow(crypto::Key enc_key) {
   Key move_idx = (capacity_ % sub_orams_[0]->Capacity()) + 1;
   auto start_accesses = SubORamsMemoryAccessCountSum();
   auto start_bytes = SubORamsMemoryBytesMovedTotalSum();
-  auto move_bl = sub_orams_[0]->ReadAndRemove(0, move_idx, enc_key, true);
+  
+  uint64_t move_leaf = log_map_[0][move_idx].leaf;
+  auto move_bl = sub_orams_[0]->ReadAndRemove(move_leaf + 1, move_idx, enc_key, true);
+  log_map_[0][move_idx].logical_key = 0;
+  log_map_[0][move_idx].leaf = 0;
   
   bool is_real = (move_bl.meta_.key_ != 0);
   sub_orams_[1]->Insert(std::move(move_bl), enc_key, is_real);
@@ -123,16 +127,18 @@ Block ORam::ReadAndRemove(Key k, crypto::Key enc_key) {
       
     uint64_t cap = (i == 0) ? cap_S : cap_L;
     uint64_t phys_k = 0;
+    uint64_t found_leaf = 0;
     for (uint64_t j = 1; j <= cap; ++j) {
         bool match = sn::obliv::ct_eq(static_cast<uint64_t>(k), log_map_[i][j].logical_key);
         phys_k = sn::obliv::ct_select<uint64_t>(j, phys_k, match);
+        found_leaf = sn::obliv::ct_select<uint64_t>(log_map_[i][j].leaf, found_leaf, match);
         log_map_[i][j].logical_key = sn::obliv::ct_select<uint64_t>(0, log_map_[i][j].logical_key, match);
         log_map_[i][j].leaf = sn::obliv::ct_select<uint64_t>(0, log_map_[i][j].leaf, match);
     }
     
     bool is_real = (phys_k != 0);
     phys_k = sn::obliv::ct_select<uint64_t>(phys_k, 1, is_real); // Dummy access to slot 1 if not found
-    auto bl = sub_orams_[i]->ReadAndRemove(0, phys_k, enc_key, is_real);
+    auto bl = sub_orams_[i]->ReadAndRemove(found_leaf + 1, phys_k, enc_key, is_real);
     
     res.key_ = sn::obliv::ct_select<Key>(k, res.key_, is_real && (bl.meta_.key_ != 0));
     if (bl.val_) {
@@ -162,14 +168,22 @@ Block ORam::Read(Key k, crypto::Key enc_key) {
       
     uint64_t cap = (i == 0) ? cap_S : cap_L;
     uint64_t phys_k = 0;
+    uint64_t found_leaf = 0;
     for (uint64_t j = 1; j <= cap; ++j) {
         bool match = sn::obliv::ct_eq(static_cast<uint64_t>(k), log_map_[i][j].logical_key);
         phys_k = sn::obliv::ct_select<uint64_t>(j, phys_k, match);
+        found_leaf = sn::obliv::ct_select<uint64_t>(log_map_[i][j].leaf, found_leaf, match);
     }
     
     bool is_real = (phys_k != 0);
     phys_k = sn::obliv::ct_select<uint64_t>(phys_k, 1, is_real);
-    auto bl = sub_orams_[i]->Read(0, phys_k, enc_key, is_real);
+    auto bl = sub_orams_[i]->Read(found_leaf + 1, phys_k, enc_key, is_real);
+    
+    uint64_t new_leaf = bl.meta_.pos_ - 1;
+    for (uint64_t j = 1; j <= cap; ++j) {
+        bool match = sn::obliv::ct_eq(j, phys_k) & is_real;
+        log_map_[i][j].leaf = sn::obliv::ct_select<uint64_t>(new_leaf, log_map_[i][j].leaf, match);
+    }
     
     res.key_ = sn::obliv::ct_select<Key>(k, res.key_, is_real && (bl.meta_.key_ != 0));
     if (bl.val_) {
