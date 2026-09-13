@@ -560,7 +560,7 @@ std::vector<static_path_oram::Block> SonicORamAdapter::ReadBatch(const std::vect
 
                       auto pre_ops = impl_->client->state_ref().metrics_snapshot().access_ops;
                       
-                      if (req.cur_leaf >= impl_->client->state_ref().tree_topology().leaf_count()) {
+                      if (req.cur_leaf > capacity_) {
                           std::cout << "[DYNO_CRITICAL] ReadBatch invalid cur_leaf: " << req.cur_leaf 
                                     << " (orig ops[j].cur_leaf: " << op.cur_leaf << ")\n";
                       }
