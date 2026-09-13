@@ -385,8 +385,8 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
       build_set[i].value.extra_data = static_cast<uint32_t>(i);
       
       std::array<uint8_t, 16> default_payload = {0};
-      int8_t default_sub = -1;
-      std::memcpy(default_payload.data() + 8, &default_sub, sizeof(int8_t));
+      uint64_t default_packed = static_cast<uint64_t>(static_cast<uint8_t>(-1)) << 56;
+      std::memcpy(default_payload.data(), &default_packed, 8);
       std::memcpy(build_set[i].value.data.data(), default_payload.data(), 16);
   }
   
@@ -979,7 +979,9 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
         uint64_t phys_k = sn::obliv::ct_select<uint64_t>(batch[orig_idx].phys_k, 0, is_real);
         uint64_t leaf = sn::obliv::ct_select<uint64_t>(batch[orig_idx].new_leaf, 0, is_real);
         
-        static_path_oram::Block new_b(static_cast<static_path_oram::Pos>(leaf + 1), static_cast<static_path_oram::Key>(phys_k));
+        static_path_oram::Block new_b(true); // Initialize as a safe dummy
+        new_b.meta_.key_ = phys_k;
+        new_b.meta_.pos_ = leaf + 1;
         
         if (batch[orig_idx].val) {
             new_b.val_ = std::make_unique<uint8_t[]>(val_len_);

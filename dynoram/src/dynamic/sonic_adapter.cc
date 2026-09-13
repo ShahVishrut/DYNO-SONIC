@@ -644,16 +644,14 @@ void SonicORamAdapter::InsertBatch(std::vector<static_path_oram::Block>& blocks,
               sn::obliv::ct_select_array(in_buf.data(), in_buf.data(), zeros.data(), kSonicBlockBytes, real);
               
               sn::oram::tree::block<kSonicBlockBytes> new_block{};
-              // SONIC expects address = -1 for dummies
+              
+              // ZingORAM expects address = -1 for dummies.
               new_block.address = sn::obliv::ct_select<uint64_t>(k - 1, static_cast<uint64_t>(-1), real);
+              
+              // Safely select the leaf (which is now guaranteed to be 0 for dummies)
               new_block.leaf_ix = sn::obliv::ct_select<uint64_t>(leaf, 0, real);
+              
               std::copy(in_buf.begin(), in_buf.end(), new_block.data.begin());
-              
-              if (blocks[j].meta_.pos_ == 0) {
-                  std::cerr << "[DEBUG] FOUND blocks[j].meta_.pos_ == 0! k=" << k << " leaf=" << leaf << " real=" << real << std::endl;
-                  std::terminate();
-              }
-              
               impl_->client->insert(new_block);
           }
       }
