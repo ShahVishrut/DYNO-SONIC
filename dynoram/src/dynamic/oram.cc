@@ -975,11 +975,11 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
         uint32_t orig_idx = elems[i].seq;
         bool is_real = !elems[i].is_dummy;
         
-        // Extract directly from the batch using the sorted sequence!
         uint64_t phys_k = sn::obliv::ct_select<uint64_t>(batch[orig_idx].phys_k, 0, is_real);
         uint64_t leaf = sn::obliv::ct_select<uint64_t>(batch[orig_idx].new_leaf, 0, is_real);
         
-        static_path_oram::Block new_b(true); // Initialize as a safe dummy
+        // FIX: Explicitly assign fields so dummy blocks have meta_.pos_ = 1, averting underflows!
+        static_path_oram::Block new_b(true); 
         new_b.meta_.key_ = phys_k;
         new_b.meta_.pos_ = leaf + 1;
         
