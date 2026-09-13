@@ -670,32 +670,149 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
     real_DL += sn::obliv::ct_select<size_t>(1, 0, is_real && is_delete && (idx == 1));
   }
 
-  // Allocate empty slots for REAL Inserts in S_large
-  std::vector<uint64_t> free_slots;
-  free_slots.reserve(B);
-  for (uint64_t j = 1; j <= cap_L && free_slots.size() < B; ++j) {
-      if (log_map_[1][j].logical_key == 0) free_slots.push_back(j);
-  }
+  // Allocate empty slots for REAL Inserts in S_large obliviously
+  std::cout << "[DYNO] Phase 3.5: O2TH Empty Slot Allocation starting..." << std::endl;
 
-  size_t free_idx = 0;
+  std::vector<uint64_t> insert_seq_arr(B, 0);
+  uint64_t current_insert_seq = 1;
   for (size_t i = 0; i < B; ++i) {
-      uint32_t orig_idx = elems[i].seq;
       bool is_real = !elems[i].is_dummy;
       bool is_insert = sn::obliv::ct_eq(elems[i].op_type, static_cast<uint8_t>(OpType::Insert));
       bool needs_slot = is_real && is_insert;
       
-      if (needs_slot) {
-          uint64_t assigned_slot = free_slots[free_idx++];
-          uint64_t initial_leaf = rng_leaf() % num_leaves_L;
-          
-          log_map_[1][assigned_slot].logical_key = elems[i].key;
-          log_map_[1][assigned_slot].leaf = initial_leaf;
-          
-          batch[orig_idx].sub_oram_idx = 1;
-          batch[orig_idx].phys_k = assigned_slot;
-          batch[orig_idx].cur_leaf = 0; // Not in tree yet
-          batch[orig_idx].new_leaf = initial_leaf;
-      }
+      uint32_t orig_idx = elems[i].seq;
+      uint64_t initial_leaf = (num_leaves_L > 0) ? (rng_leaf() % num_leaves_L) : 0;
+      batch[orig_idx].new_leaf = sn::obliv::ct_select(initial_leaf, batch[orig_idx].new_leaf, needs_slot);
+      batch[orig_idx].cur_leaf = sn::obliv::ct_select<uint64_t>(0, batch[orig_idx].cur_leaf, needs_slot);
+      
+      insert_seq_arr[i] = sn::obliv::ct_select<uint64_t>(current_insert_seq, 0, needs_slot);
+      current_insert_seq = sn::obliv::ct_select<uint64_t>(current_insert_seq + 1, current_insert_seq, needs_slot);
+  }
+
+  using O2TH_Alloc = sn::omap::o2th::o2th_rwkv<uint64_t, 16>;
+  O2TH_Alloc::config cfg_alloc;
+  cfg_alloc.block_count = B;
+  cfg_alloc.bucket_size = 64;
+  sn::util::log::logger log_alloc = sn::util::log::create("oram:alloc");
+
+  sn::threads::thread_team team_alloc(g_oram_pool->pool(), 24);
+  O2TH_Alloc o2th_alloc(cfg_alloc, std::move(team_alloc), log_alloc);
+  o2th_alloc.initialize();
+
+  std::vector<O2TH_Alloc::maybe_dummy<O2TH_Alloc::op_request>> alloc_build(B);
+  for (size_t i = 0; i < B; ++i) {
+      uint32_t orig_idx = elems[i].seq;
+      bool needs_slot = (insert_seq_arr[i] > 0);
+
+      alloc_build[i].is_dummy = !needs_slot;
+      alloc_build[i].value.key = insert_seq_arr[i]; 
+      alloc_build[i].value.is_write = true;
+      alloc_build[i].value.extra_data = static_cast<uint32_t>(orig_idx); 
+      
+      std::array<uint8_t, 16> payload = {0};
+      uint64_t logical_key = elems[i].key;
+      uint64_t leaf_to_write = batch[orig_idx].new_leaf;
+      std::memcpy(payload.data(), &logical_key, sizeof(uint64_t));
+      std::memcpy(payload.data() + 8, &leaf_to_write, sizeof(uint64_t));
+      alloc_build[i].value.data = payload;
+  }
+
+  o2th_alloc.build(sn::util::span<O2TH_Alloc::maybe_dummy<O2TH_Alloc::op_request>>(alloc_build.data(), alloc_build.size()));
+
+  std::vector<O2TH_Alloc::data_query> alloc_queries(cap_L);
+  uint64_t empty_seq = 1;
+  for (uint64_t j = 1; j <= cap_L; ++j) {
+      bool is_empty = (log_map_[1][j].logical_key == 0);
+      uint64_t query_key = sn::obliv::ct_select<uint64_t>(empty_seq, 0, is_empty);
+
+      std::array<uint8_t, 16> payload = {0};
+      std::memcpy(payload.data(), &j, sizeof(uint64_t)); 
+
+      alloc_queries[j-1].assign(query_key, payload, true);
+      empty_seq = sn::obliv::ct_select<uint64_t>(empty_seq + 1, empty_seq, is_empty);
+  }
+
+  std::vector<O2TH_Alloc::bucket_index> alloc_pos_l1(cap_L);
+  std::vector<O2TH_Alloc::bucket_index> alloc_pos_l2(cap_L);
+
+  if (cap_L > 0) {
+      o2th_alloc.access_batch(sn::util::span<O2TH_Alloc::data_query>(alloc_queries.data(), alloc_queries.size()),
+                              sn::util::span<O2TH_Alloc::bucket_index>(alloc_pos_l1.data(), alloc_pos_l1.size()),
+                              sn::util::span<O2TH_Alloc::bucket_index>(alloc_pos_l2.data(), alloc_pos_l2.size()));
+  }
+
+  for (uint64_t j = 1; j <= cap_L; ++j) {
+      bool is_empty = (log_map_[1][j].logical_key == 0);
+      uint64_t logical_key_received = 0;
+      uint64_t leaf_received = 0;
+      std::memcpy(&logical_key_received, alloc_queries[j-1].data().data(), sizeof(uint64_t));
+      std::memcpy(&leaf_received, alloc_queries[j-1].data().data() + 8, sizeof(uint64_t));
+      
+      bool received_valid = is_empty && (logical_key_received != 0);
+      log_map_[1][j].logical_key = sn::obliv::ct_select<uint64_t>(logical_key_received, log_map_[1][j].logical_key, received_valid);
+      log_map_[1][j].leaf = sn::obliv::ct_select<uint64_t>(leaf_received, log_map_[1][j].leaf, received_valid);
+  }
+
+  std::vector<O2TH_Alloc::maybe_dummy<O2TH_Alloc::op_request>> alloc_retrieve(2 * B);
+  std::vector<uint8_t> alloc_compact_marks(2 * B);
+  std::vector<size_t> alloc_compact_prefix(2 * B + 1);
+
+  o2th_alloc.retrieve(sn::util::span<O2TH_Alloc::maybe_dummy<O2TH_Alloc::op_request>>(alloc_retrieve.data(), alloc_retrieve.size()),
+                      sn::util::span<uint8_t>(alloc_compact_marks.data(), alloc_compact_marks.size()),
+                      sn::util::span<size_t>(alloc_compact_prefix.data(), alloc_compact_prefix.size()));
+
+  struct alignas(8) AllocJoinElement {
+      uint32_t sort_key;
+      bool is_target;
+      uint32_t orig_idx;
+      uint64_t assigned_slot;
+  };
+
+  std::vector<AllocJoinElement> alloc_join(2 * B);
+  for (size_t i = 0; i < B; ++i) {
+      bool is_dummy_ret = alloc_retrieve[i].is_dummy;
+      alloc_join[i].sort_key = sn::obliv::ct_select<uint32_t>(UINT32_MAX, alloc_retrieve[i].value.extra_data, is_dummy_ret);
+      alloc_join[i].is_target = false;
+      alloc_join[i].orig_idx = 0;
+      
+      uint64_t assigned_slot = 0;
+      std::memcpy(&assigned_slot, alloc_retrieve[i].value.data.data(), sizeof(uint64_t));
+      alloc_join[i].assigned_slot = assigned_slot;
+      
+      alloc_join[B + i].sort_key = static_cast<uint32_t>(i);
+      alloc_join[B + i].is_target = true;
+      alloc_join[B + i].orig_idx = static_cast<uint32_t>(i);
+      alloc_join[B + i].assigned_slot = 0;
+  }
+
+  auto comp_alloc = [](const AllocJoinElement& a, const AllocJoinElement& b) {
+      bool key_eq = sn::obliv::ct_eq(a.sort_key, b.sort_key);
+      bool key_lt = sn::obliv::ct_lt(a.sort_key, b.sort_key);
+      bool target_lt = static_cast<uint8_t>(a.is_target) < static_cast<uint8_t>(b.is_target);
+      return sn::obliv::ct_select(target_lt, key_lt, key_eq);
+  };
+  sn::sortshuffle::ser::bitonic::detail::noop_hook hook_alloc;
+  sn::sortshuffle::ser::bitonic::detail::bitonic_sort_impl(alloc_join.data(), 2 * B, [](const AllocJoinElement& e){ return e; }, comp_alloc, hook_alloc);
+
+  uint64_t cur_assigned_slot = 0;
+  for (size_t i = 0; i < 2 * B; ++i) {
+      bool is_update = !alloc_join[i].is_target;
+      cur_assigned_slot = sn::obliv::ct_select<uint64_t>(alloc_join[i].assigned_slot, cur_assigned_slot, is_update);
+      alloc_join[i].assigned_slot = sn::obliv::ct_select<uint64_t>(cur_assigned_slot, alloc_join[i].assigned_slot, alloc_join[i].is_target);
+  }
+
+  auto comp_alloc2 = [](const AllocJoinElement& a, const AllocJoinElement& b) {
+      bool target_lt = static_cast<uint8_t>(b.is_target) < static_cast<uint8_t>(a.is_target);
+      bool idx_lt = sn::obliv::ct_lt(a.orig_idx, b.orig_idx);
+      return sn::obliv::ct_select(idx_lt, target_lt, a.is_target == b.is_target);
+  };
+  sn::sortshuffle::ser::bitonic::detail::bitonic_sort_impl(alloc_join.data(), 2 * B, [](const AllocJoinElement& e){ return e; }, comp_alloc2, hook_alloc);
+
+  for (size_t i = 0; i < B; ++i) {
+      uint32_t orig_idx = alloc_join[i].orig_idx;
+      bool received_slot = (alloc_join[i].assigned_slot != 0);
+      batch[orig_idx].sub_oram_idx = sn::obliv::ct_select<int8_t>(1, batch[orig_idx].sub_oram_idx, received_slot);
+      batch[orig_idx].phys_k = sn::obliv::ct_select<uint64_t>(alloc_join[i].assigned_slot, batch[orig_idx].phys_k, received_slot);
   }
 
   std::cout << "[DYNO] Phase 4: O-Sort (Group by OpType) starting..." << std::endl;
