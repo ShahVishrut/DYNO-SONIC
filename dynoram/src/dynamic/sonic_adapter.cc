@@ -562,6 +562,10 @@ std::vector<static_path_oram::Block> SonicORamAdapter::ReadBatch(const std::vect
                       req.in = sn::util::span<uint8_t>(in_buf.data(), in_buf.size());
                       req.out = sn::util::span<uint8_t>(out_buf.data(), out_buf.size());
 
+                      if (val_len_ > 0 && req.is_write && op.is_real && req.address < 10) {
+                          std::cout << "[DEBUG] ReadBatch WRITE addr=" << req.address << " val[0]=" << (int)in_buf[sizeof(static_path_oram::BlockMetadata)] << "\n";
+                      }
+
                       auto pre_ops = impl_->client->state_ref().metrics_snapshot().access_ops;
                       
                       if (req.cur_leaf > capacity_) {
