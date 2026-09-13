@@ -841,24 +841,10 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
   NoOpHook no_op_hook;
   sn::sortshuffle::ser::bitonic::detail::bitonic_sort_impl(elems.data(), B, key_ext, comp3, no_op_hook);
 
-  std::vector<Block> inserts;
   std::vector<SonicORamAdapter::AccessOp> small_ops, large_ops;
 
   // Static partition point based on public initial distribution
   size_t original_accesses = B - original_inserts;
-
-  for (size_t i = original_accesses; i < B; ++i) {
-    Block b;
-    bool is_real = !elems[i].is_dummy;
-    uint32_t orig_idx = elems[i].seq;
-    b.key_ = sn::obliv::ct_select<uint64_t>(batch[orig_idx].key, 0, is_real);
-    
-    if (batch[orig_idx].val) {
-      b.val_ = std::make_unique<uint8_t[]>(val_len_);
-      std::copy(batch[orig_idx].val.get(), batch[orig_idx].val.get() + val_len_, b.val_.get());
-    }
-    inserts.push_back(std::move(b));
-  }
 
   for (size_t i = 0; i < original_accesses; ++i) {
     uint32_t orig_idx = elems[i].seq;
@@ -979,23 +965,25 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
 
   if (sub_orams_[1]) {
     std::vector<static_path_oram::Block> sn_inserts;
-    sn_inserts.reserve(inserts.size());
-    for (auto& b : inserts) {
-        uint64_t phys_k = 0;
-        uint64_t leaf = 0;
-        for (size_t j = original_accesses; j < B; ++j) {
-            uint32_t orig_idx = elems[j].seq;
-            bool match = sn::obliv::ct_eq(b.key_, batch[orig_idx].key);
-            phys_k = sn::obliv::ct_select(batch[orig_idx].phys_k, phys_k, match);
-            leaf = sn::obliv::ct_select(batch[orig_idx].new_leaf, leaf, match);
-        }
+    sn_inserts.reserve(B - original_accesses);
+    
+    for (size_t i = original_accesses; i < B; ++i) {
+        uint32_t orig_idx = elems[i].seq;
+        bool is_real = !elems[i].is_dummy;
+        
+        // Extract directly from the batch using the sorted sequence!
+        uint64_t phys_k = sn::obliv::ct_select<uint64_t>(batch[orig_idx].phys_k, 0, is_real);
+        uint64_t leaf = sn::obliv::ct_select<uint64_t>(batch[orig_idx].new_leaf, 0, is_real);
         
         static_path_oram::Block new_b(static_cast<static_path_oram::Pos>(leaf + 1), static_cast<static_path_oram::Key>(phys_k));
-        if (b.val_) {
-            new_b.val_ = std::move(b.val_);
+        
+        if (batch[orig_idx].val) {
+            new_b.val_ = std::make_unique<uint8_t[]>(val_len_);
+            std::copy(batch[orig_idx].val.get(), batch[orig_idx].val.get() + val_len_, new_b.val_.get());
         }
         sn_inserts.push_back(std::move(new_b));
     }
+    
     std::cout << "[DYNO] Phase 6: Sub-ORAM InsertBatch starting..." << std::endl;
     sub_orams_[1]->InsertBatch(sn_inserts, enc_key, steady_state, true);
   }
