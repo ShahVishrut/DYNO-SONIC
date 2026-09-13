@@ -51,7 +51,6 @@ void ObliviousSwapBlock(PORamBlock& a, PORamBlock& b, bool cond, size_t val_len)
         sn::obliv::ct_swap(&a.val_.get()[i], &b.val_.get()[i], cond);
     }
 }
-
 void ObliviousMergeHalves(std::vector<PORamBlock>& A, size_t start, size_t length, size_t val_len) {
     size_t step = length / 2;
     while (step > 0) {
@@ -64,7 +63,6 @@ void ObliviousMergeHalves(std::vector<PORamBlock>& A, size_t start, size_t lengt
         step /= 2;
     }
 }
-
 void OCompact(std::vector<PORamBlock>& A, size_t start, size_t length, size_t val_len) {
     if (length <= 1) return;
     size_t half = length / 2;
@@ -135,7 +133,7 @@ Block ORam::ReadAndRemove(Key k, crypto::Key enc_key) {
     }
     
     bool is_real = (phys_k != 0);
-    phys_k = sn::obliv::ct_select<uint64_t>(phys_k, 1, is_real); // Dummy access to slot 1 if not found
+    phys_k = sn::obliv::ct_select<uint64_t>(phys_k, 1, is_real);
     auto bl = sub_orams_[i]->ReadAndRemove(cur_leaf + 1, phys_k, enc_key, is_real);
     
     res.key_ = sn::obliv::ct_select<Key>(k, res.key_, is_real && (bl.meta_.key_ != 0));
@@ -293,7 +291,7 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
     Key key;
     uint32_t seq;
     bool is_dummy;
-    uint8_t op_type; // 0=Insert, 1=Search, 2=Delete, 3=Update
+    uint8_t op_type; 
   };
   
   uint64_t cap_S = sub_orams_[0] ? sub_orams_[0]->Capacity() : 0;
@@ -341,7 +339,6 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
   auto key_ext = [](const OblivElem& e) { return e; };
 
   std::cout << "[DYNO] Phase 1: O-Sort (Group by Key) starting... B=" << B << std::endl;
-  // Phase 1: O-Sort (Group by Key, then Seq)
   auto comp1 = [](const OblivElem& a, const OblivElem& b) {
     bool key_eq = sn::obliv::ct_eq(a.key, b.key);
     bool key_lt = sn::obliv::ct_lt(a.key, b.key);
@@ -355,7 +352,6 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
   }
 
   std::cout << "[DYNO] Phase 2: Pre-Phase LogMap Scan starting..." << std::endl;
-  // Pre-Phase: Oblivious Routing via LogMap Scan
   for (auto& op : batch) {
       op.sub_oram_idx = -1;
       op.phys_k = 0;
@@ -437,9 +433,6 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
       uint64_t new_leaf;
   };
 
-  uint64_t cap_S_local = sub_orams_[0] ? sub_orams_[0]->Capacity() : 0;
-  uint64_t cap_L_local = sub_orams_[1] ? sub_orams_[1]->Capacity() : 0;
-
   std::vector<JoinElement> join_arr(2 * B);
   for (size_t i = 0; i < B; ++i) {
       bool is_dummy_update = retrieve_data[i].is_dummy;
@@ -455,9 +448,11 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
       uint64_t phys_k = packed & 0x00FFFFFFFFFFFFFFULL;
       int8_t sub_idx = static_cast<int8_t>(packed >> 56);
       
-      uint64_t new_leaf = 0;
-      if (sub_idx == 0 && sub_orams_[0]) new_leaf = sub_orams_[0]->GenerateRandomLeaf() - 1;
-      else if (sub_idx == 1 && sub_orams_[1]) new_leaf = sub_orams_[1]->GenerateRandomLeaf() - 1;
+      uint64_t r_leaf_S = sub_orams_[0] ? sub_orams_[0]->GenerateRandomLeaf() - 1 : 0;
+      uint64_t r_leaf_L = sub_orams_[1] ? sub_orams_[1]->GenerateRandomLeaf() - 1 : 0;
+      uint64_t new_leaf = sn::obliv::ct_select<uint64_t>(r_leaf_L, r_leaf_S, sn::obliv::ct_eq<int8_t>(sub_idx, 0));
+      
+      // LOGMAP LEAK REMOVED HERE
       
       join_arr[i].phys_k = phys_k;
       join_arr[i].sub_idx = sub_idx;
@@ -554,7 +549,6 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
   };
 
   std::cout << "[DYNO] Phase 3: O-Scan (Collapse) starting..." << std::endl;
-  // Pass 1: Forward Scan (Search Resolution & State Tracking)
   std::vector<uint8_t> current_payload(val_len_, 0);
   bool has_payload = false;
   bool is_deleted = false;
@@ -597,7 +591,6 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
       sn::obliv::ct_set_ref(elems[i].is_dummy, true, search_becomes_dummy | update_becomes_dummy);
   }
 
-  // Pass 2: Backward Scan (Semantic Deduplication)
   bool has_future_delete = false;
   bool has_future_access = false;
   bool has_future_insert = false;
@@ -661,7 +654,6 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
   }
 
   std::cout << "[DYNO] Phase 3.5: O2TH Empty Slot Allocation starting..." << std::endl;
-  // Allocate empty slots for REAL Inserts in S_large obliviously
   std::vector<uint64_t> insert_seq_arr(B, 0);
   uint64_t current_insert_seq = 1;
   for (size_t i = 0; i < B; ++i) {
@@ -810,7 +802,6 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
   }
 
   std::cout << "[DYNO] Phase 4: O-Sort (Group by OpType) starting..." << std::endl;
-  // Phase 3: O-Sort (Group by OpType)
   struct NoOpHook {
       void operator()(OblivElem* a, OblivElem* b, bool cond) const {}
   };
@@ -828,8 +819,6 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
   sn::sortshuffle::ser::bitonic::detail::bitonic_sort_impl(elems.data(), B, key_ext, comp3, no_op_hook);
 
   std::vector<SonicORamAdapter::AccessOp> small_ops, large_ops;
-
-  // Static partition point based on public initial distribution
   size_t original_accesses = B - original_inserts;
 
   for (size_t i = 0; i < original_accesses; ++i) {
@@ -1179,10 +1168,10 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
         
         std::vector<static_path_oram::Block> Buffer = sub_orams_[0]->ReadAndRemoveBatch(ops_to_read, enc_key);
         
-        for (int64_t i = k_sec; i < k_sec; ++i) { // Add padding if k_sec wasn't power of 2
+        for (int64_t i = k_sec; i < k_sec; ++i) { 
             Buffer.emplace_back(true);
             Buffer.back().meta_.key_ = 0;
-            Buffer.back().meta_.pos_ = 1;
+            Buffer.back().meta_.pos_ = 1; // Safely set to 1
             if (val_len_ > 0) {
                 Buffer.back().val_ = std::make_unique<uint8_t[]>(val_len_);
                 std::fill(Buffer.back().val_.get(), Buffer.back().val_.get() + val_len_, 0);
@@ -1261,10 +1250,10 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
         
         std::vector<static_path_oram::Block> Buffer = sub_orams_[1]->ReadAndRemoveBatch(ops_to_read, enc_key);
         
-        for (int64_t i = k_sec; i < k_sec; ++i) { // Add padding
+        for (int64_t i = k_sec; i < k_sec; ++i) { 
             Buffer.emplace_back(true);
             Buffer.back().meta_.key_ = 0;
-            Buffer.back().meta_.pos_ = 1;
+            Buffer.back().meta_.pos_ = 1; // Safely set to 1
             if (val_len_ > 0) {
                 Buffer.back().val_ = std::make_unique<uint8_t[]>(val_len_);
                 std::fill(Buffer.back().val_.get(), Buffer.back().val_.get() + val_len_, 0);
