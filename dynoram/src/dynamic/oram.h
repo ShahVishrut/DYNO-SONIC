@@ -58,9 +58,17 @@ class ORam {
   [[nodiscard]] uint64_t MemoryBytesMovedTotal() const { return memory_bytes_moved_total_; }
 
   [[nodiscard]] size_t GetSubORamValidCount(int index) const {
-      if (index == 0 && sub_orams_[0]) return sub_orams_[0]->GetAllValidKeys().size();
-      if (index == 1 && sub_orams_[1]) return sub_orams_[1]->GetAllValidKeys().size();
-      return 0;
+      size_t count = 0;
+      if (index == 0 && sub_orams_[0]) {
+          for (size_t i = 1; i < log_map_[0].size(); ++i) {
+              if (log_map_[0][i].logical_key != 0) count++;
+          }
+      } else if (index == 1 && sub_orams_[1]) {
+          for (size_t i = 1; i < log_map_[1].size(); ++i) {
+              if (log_map_[1][i].logical_key != 0) count++;
+          }
+      }
+      return count;
   }
   
   [[nodiscard]] size_t GetSubORamCapacity(int index) const {

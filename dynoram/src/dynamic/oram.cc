@@ -1032,14 +1032,28 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
     int64_t T_pow2 = 1;
     while (T_pow2 < T) T_pow2 *= 2;
 
-    auto no_filter = [](Key phys_k) { return true; };
+    auto extract_keys = [&](int sub_idx, int64_t k_count, int64_t T_count) {
+        std::vector<Key> S_keys(T_count, 0);
+        uint64_t count = 0;
+        uint64_t cap = (sub_idx == 0) ? cap_S : cap_L;
+        for (uint64_t i = 1; i <= cap; ++i) {
+            bool is_real = (log_map_[sub_idx][i].logical_key != 0);
+            bool take = is_real & (count < static_cast<uint64_t>(k_count));
+            for (uint64_t j = 0; j < static_cast<uint64_t>(T_count); ++j) {
+                bool match = take & (count == j);
+                S_keys[j] = sn::obliv::ct_select<Key>(i, S_keys[j], match);
+            }
+            count = sn::obliv::ct_select(count + 1, count, take);
+        }
+        return S_keys;
+    };
     
     bool transfer_up = sn::obliv::ct_gt(k_transfer, static_cast<int64_t>(0));
     bool transfer_down = sn::obliv::ct_lt(k_transfer, static_cast<int64_t>(0));
     int64_t abs_k_transfer = sn::obliv::ct_select(-k_transfer, k_transfer, transfer_down);
     
-    std::vector<Key> extracted_0 = sub_orams_[0]->ObliviousExtractValidKeys(abs_k_transfer, T, no_filter);
-    std::vector<Key> extracted_1 = sub_orams_[1]->ObliviousExtractValidKeys(abs_k_transfer, T, no_filter);
+    std::vector<Key> extracted_0 = extract_keys(0, abs_k_transfer, T);
+    std::vector<Key> extracted_1 = extract_keys(1, abs_k_transfer, T);
     
     std::vector<std::pair<Key, bool>> keys_to_read_0(T), keys_to_read_1(T);
     for (int64_t i = 0; i < T; ++i) {
@@ -1129,8 +1143,22 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
     log_map_[1].resize((2 * old_y) + 1, {0, 0});
     
     if (k_sec > 0) {
-        auto no_filter = [](Key phys_k) { return true; };
-        std::vector<Key> extracted = sub_orams_[0]->ObliviousExtractValidKeys(k_sec, k_sec, no_filter);
+        auto extract_keys_sec = [&](int sub_idx, int64_t k_count, int64_t T_count) {
+            std::vector<Key> S_keys(T_count, 0);
+            uint64_t count = 0;
+            uint64_t cap = static_cast<uint64_t>(old_y); // the old sub_orams_[1] which is now sub_orams_[0]
+            for (uint64_t i = 1; i <= cap; ++i) {
+                bool is_real = (log_map_[sub_idx][i].logical_key != 0);
+                bool take = is_real & (count < static_cast<uint64_t>(k_count));
+                for (uint64_t j = 0; j < static_cast<uint64_t>(T_count); ++j) {
+                    bool match = take & (count == j);
+                    S_keys[j] = sn::obliv::ct_select<Key>(i, S_keys[j], match);
+                }
+                count = sn::obliv::ct_select(count + 1, count, take);
+            }
+            return S_keys;
+        };
+        std::vector<Key> extracted = extract_keys_sec(0, k_sec, k_sec);
         
         std::vector<std::pair<Key, bool>> keys_to_read;
         for (int64_t i = 0; i < k_sec; ++i) {
