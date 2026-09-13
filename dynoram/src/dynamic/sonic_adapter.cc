@@ -644,13 +644,9 @@ void SonicORamAdapter::InsertBatch(std::vector<static_path_oram::Block>& blocks,
               sn::obliv::ct_select_array(in_buf.data(), in_buf.data(), zeros.data(), kSonicBlockBytes, real);
               
               sn::oram::tree::block<kSonicBlockBytes> new_block{};
-              
-              // ZingORAM expects address = -1 for dummies.
+              // SONIC expects address = -1 for dummies, but leaf_ix must always be a valid tree leaf index
               new_block.address = sn::obliv::ct_select<uint64_t>(k - 1, static_cast<uint64_t>(-1), real);
-              
-              // Safely select the leaf (which is now guaranteed to be 0 for dummies)
-              new_block.leaf_ix = sn::obliv::ct_select<uint64_t>(leaf, 0, real);
-              
+              new_block.leaf_ix = leaf; // Always use the valid generated leaf; address=-1 handles the dummy mask
               std::copy(in_buf.begin(), in_buf.end(), new_block.data.begin());
               impl_->client->insert(new_block);
           }
