@@ -560,6 +560,11 @@ std::vector<static_path_oram::Block> SonicORamAdapter::ReadBatch(const std::vect
 
                       auto pre_ops = impl_->client->state_ref().metrics_snapshot().access_ops;
                       
+                      if (req.cur_leaf >= impl_->client->state_ref().tree_topology().leaf_count()) {
+                          std::cout << "[DYNO_CRITICAL] ReadBatch invalid cur_leaf: " << req.cur_leaf 
+                                    << " (orig ops[j].cur_leaf: " << op.cur_leaf << ")\n";
+                      }
+                      
                       // 4. REMOVED MUTEX: Native lock-free concurrency via SONIC's access_gate!
                       impl_->client->access(req, tl_scratch);
                       
@@ -626,13 +631,12 @@ void SonicORamAdapter::InsertBatch(std::vector<static_path_oram::Block>& blocks,
           size_t chunk_end = std::min(B, chunk_start + chunk_size);
           for (size_t j = chunk_start; j < chunk_end; ++j) {
               uint64_t k = blocks[j].meta_.key_;
-              uint64_t raw_pos = blocks[j].meta_.pos_;
-              
-              // 1. Bitwise real mask: 0xFFFFFFFFFFFFFFFF if k != 0, else 0x0000000000000000
               bool is_real = (k != 0);
-              uint64_t real_mask = -static_cast<uint64_t>(is_real);
               
-              // 2. Safely compute the leaf. If raw_pos is 0, substitute 1 to prevent underflow.
+              // PURE BITWISE MASKING: No macros, no branches, no underflow traps.
+              uint64_t real_mask = is_real ? 0xFFFFFFFFFFFFFFFFULL : 0x0000000000000000ULL;
+              
+              uint32_t raw_pos = blocks[j].meta_.pos_;
               uint64_t safe_pos = (raw_pos > 0) ? raw_pos : 1; 
               uint64_t leaf = safe_pos - 1;
               
@@ -647,13 +651,12 @@ void SonicORamAdapter::InsertBatch(std::vector<static_path_oram::Block>& blocks,
                   }
               }
               
-              // 3. Oblivious dummy mask over the buffer
               std::vector<uint8_t> zeros(kSonicBlockBytes, 0);
               sn::obliv::ct_select_array(in_buf.data(), in_buf.data(), zeros.data(), kSonicBlockBytes, is_real);
               
               sn::oram::tree::block<kSonicBlockBytes> new_block{};
               
-              // 4. Pure bitwise assignment. No macros to flip!
+              // If real, use (k-1) and (leaf). If dummy, mathematically force address to -1 and leaf_ix to 0.
               new_block.address = ((k - 1) & real_mask) | (static_cast<uint64_t>(-1) & ~real_mask);
               new_block.leaf_ix = (leaf & real_mask) | (0 & ~real_mask);
               
