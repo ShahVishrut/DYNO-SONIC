@@ -329,7 +329,7 @@ void SonicORamAdapter::Insert(static_path_oram::Block block, crypto::Key enc_key
   // 1. Unconditional Stash Insert (Real or Dummy)
   sn::oram::tree::block<kSonicBlockBytes> new_block{};
   new_block.address = sn::obliv::ct_select<uint64_t>(k - 1, static_cast<uint64_t>(-1), execute_insert);
-  new_block.leaf_ix = sn::obliv::ct_select<uint64_t>(write_leaf, static_cast<uint64_t>(-1), execute_insert);
+  new_block.leaf_ix = sn::obliv::ct_select<uint64_t>(leaf, 0, real);
   std::copy(in_buf.begin(), in_buf.end(), new_block.data.begin());
   impl_->client->insert(new_block);
 
