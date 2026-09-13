@@ -269,6 +269,10 @@ static_path_oram::Block SonicORamAdapter::Read(static_path_oram::Pos p, static_p
       sn::obliv::ct_select_array(res.val_.get(), res.val_.get(), zeros.data(), val_len_, is_real);
   }
   
+  if (val_len_ > 0 && k == 1 && capacity_ > 1024) {
+      std::cout << "[DEBUG] SonicORamAdapter::Read k=" << k << " is_real=" << is_real << " meta.key=" << res.meta_.key_ << " val[0]=" << (int)res.val_.get()[0] << "\n";
+  }
+
   return res;
 }
 
