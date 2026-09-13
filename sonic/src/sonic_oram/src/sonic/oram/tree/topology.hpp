@@ -4,6 +4,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <vector>
+#include <execinfo.h>
+#include <cstdlib>
 
 #include "sonic/obliv/ops/core_ops.hpp"
 #include "sonic/util/log.hpp"
@@ -163,6 +165,17 @@ public:
     if (leaf_ix >= leaf_count_cached_) {
         std::cerr << "[DYNO_CRASH] path_to_leaf out of bounds: leaf_ix=" << leaf_ix 
                   << " >= leaf_count=" << leaf_count_cached_ << std::endl;
+        // Print backtrace to identify the caller
+        void* callstack[32];
+        int frames = backtrace(callstack, 32);
+        char** symbols = backtrace_symbols(callstack, frames);
+        if (symbols) {
+            std::cerr << "[DYNO_CRASH] Backtrace:" << std::endl;
+            for (int i = 0; i < frames; ++i) {
+                std::cerr << "  [" << i << "] " << symbols[i] << std::endl;
+            }
+            free(symbols);
+        }
     }
     sn::util::log::ensure(leaf_ix < leaf_count_cached_, "tree::topology::path_to_leaf: leaf index out of range");
     sn::util::log::ensure(node_ids.size() == height_ + 1, "tree::topology::path_to_leaf: node span size mismatch");
