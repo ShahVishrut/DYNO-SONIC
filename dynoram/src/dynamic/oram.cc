@@ -937,17 +937,20 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
       uint64_t phys_k = batch[orig_idx].phys_k;
       uint64_t new_leaf = batch[orig_idx].new_leaf;
       
-      if (phys_k > 0 && phys_k < log_map_[0].size()) {
-          bool match_0 = sn::obliv::ct_eq<uint8_t>(idx, 0);
-          log_map_[0][phys_k].logical_key = sn::obliv::ct_select<uint64_t>(0, log_map_[0][phys_k].logical_key, match_0 & should_clear);
-          log_map_[0][phys_k].leaf = sn::obliv::ct_select<uint64_t>(0, log_map_[0][phys_k].leaf, match_0 & should_clear);
-          log_map_[0][phys_k].leaf = sn::obliv::ct_select<uint64_t>(new_leaf, log_map_[0][phys_k].leaf, match_0 & should_update);
+      // Obliviously scan log_map_[0]
+      for (uint64_t j = 1; j <= cap_S; ++j) {
+          bool match = (j == phys_k) && sn::obliv::ct_eq<uint8_t>(idx, 0);
+          log_map_[0][j].logical_key = sn::obliv::ct_select<uint64_t>(0, log_map_[0][j].logical_key, match & should_clear);
+          log_map_[0][j].leaf = sn::obliv::ct_select<uint64_t>(0, log_map_[0][j].leaf, match & should_clear);
+          log_map_[0][j].leaf = sn::obliv::ct_select<uint64_t>(new_leaf, log_map_[0][j].leaf, match & should_update);
       }
-      if (phys_k > 0 && phys_k < log_map_[1].size()) {
-          bool match_1 = sn::obliv::ct_eq<uint8_t>(idx, 1);
-          log_map_[1][phys_k].logical_key = sn::obliv::ct_select<uint64_t>(0, log_map_[1][phys_k].logical_key, match_1 & should_clear);
-          log_map_[1][phys_k].leaf = sn::obliv::ct_select<uint64_t>(0, log_map_[1][phys_k].leaf, match_1 & should_clear);
-          log_map_[1][phys_k].leaf = sn::obliv::ct_select<uint64_t>(new_leaf, log_map_[1][phys_k].leaf, match_1 & should_update);
+      
+      // Obliviously scan log_map_[1]
+      for (uint64_t j = 1; j <= cap_L; ++j) {
+          bool match = (j == phys_k) && sn::obliv::ct_eq<uint8_t>(idx, 1);
+          log_map_[1][j].logical_key = sn::obliv::ct_select<uint64_t>(0, log_map_[1][j].logical_key, match & should_clear);
+          log_map_[1][j].leaf = sn::obliv::ct_select<uint64_t>(0, log_map_[1][j].leaf, match & should_clear);
+          log_map_[1][j].leaf = sn::obliv::ct_select<uint64_t>(new_leaf, log_map_[1][j].leaf, match & should_update);
       }
   }
 
@@ -998,10 +1001,9 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
         uint64_t phys_k = sn::obliv::ct_select<uint64_t>(batch[orig_idx].phys_k, 0, is_real);
         uint64_t leaf = sn::obliv::ct_select<uint64_t>(batch[orig_idx].new_leaf, 0, is_real);
         
-        // FIX: Explicitly assign fields so dummy blocks have meta_.pos_ = 1, averting underflows!
         static_path_oram::Block new_b(true); 
         new_b.meta_.key_ = phys_k;
-        new_b.meta_.pos_ = leaf + 1;
+        new_b.meta_.pos_ = leaf + 1; // Passed as leaf+1 so pos_valid = true in InsertBatch
         
         if (batch[orig_idx].val) {
             new_b.val_ = std::make_unique<uint8_t[]>(val_len_);
@@ -1089,7 +1091,13 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
     
     for (int64_t i = T; i < T_pow2; ++i) {
         Buffer_0.emplace_back(true);
+        Buffer_0.back().meta_.key_ = 0;
+        Buffer_0.back().meta_.pos_ = 1; // Safely set to 1
+
         Buffer_1.emplace_back(true);
+        Buffer_1.back().meta_.key_ = 0;
+        Buffer_1.back().meta_.pos_ = 1; // Safely set to 1
+
         if (val_len_ > 0) {
             Buffer_0.back().val_ = std::make_unique<uint8_t[]>(val_len_);
             std::fill(Buffer_0.back().val_.get(), Buffer_0.back().val_.get() + val_len_, 0);

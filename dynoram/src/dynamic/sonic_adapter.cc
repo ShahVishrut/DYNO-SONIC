@@ -621,20 +621,20 @@ void SonicORamAdapter::InsertBatch(std::vector<static_path_oram::Block>& blocks,
   size_t B = blocks.size();
   
   if (all_new) {
-      // 3. Chunked Stash Insertion
-      // Increased chunk size to take advantage of larger disjoint epoch window
       size_t chunk_size = 768; 
       for (size_t chunk_start = 0; chunk_start < B; chunk_start += chunk_size) {
           size_t chunk_end = std::min(B, chunk_start + chunk_size);
           for (size_t j = chunk_start; j < chunk_end; ++j) {
               uint64_t k = blocks[j].meta_.key_;
-              bool real = (!sn::obliv::ct_eq<uint64_t>(k, 0));
-              // pos_ is uint32_t; if pos_==0, (pos_-1) underflows to UINT32_MAX.
-              // Guard: only compute (pos_-1) when pos_>0; otherwise use 0.
-              uint32_t raw_pos = blocks[j].meta_.pos_;
-              bool pos_valid = (raw_pos > 0);
-              uint64_t leaf = sn::obliv::ct_select<uint64_t>(
-                  static_cast<uint64_t>(raw_pos) - 1, 0, pos_valid);
+              uint64_t raw_pos = blocks[j].meta_.pos_;
+              
+              // 1. Bitwise real mask: 0xFFFFFFFFFFFFFFFF if k != 0, else 0x0000000000000000
+              bool is_real = (k != 0);
+              uint64_t real_mask = -static_cast<uint64_t>(is_real);
+              
+              // 2. Safely compute the leaf. If raw_pos is 0, substitute 1 to prevent underflow.
+              uint64_t safe_pos = (raw_pos > 0) ? raw_pos : 1; 
+              uint64_t leaf = safe_pos - 1;
               
               thread_local std::array<uint8_t, kSonicBlockBytes> in_buf;
               std::fill(in_buf.begin(), in_buf.end(), 0);
@@ -647,17 +647,15 @@ void SonicORamAdapter::InsertBatch(std::vector<static_path_oram::Block>& blocks,
                   }
               }
               
-              // Oblivious dummy mask
+              // 3. Oblivious dummy mask over the buffer
               std::vector<uint8_t> zeros(kSonicBlockBytes, 0);
-              sn::obliv::ct_select_array(in_buf.data(), in_buf.data(), zeros.data(), kSonicBlockBytes, real);
+              sn::obliv::ct_select_array(in_buf.data(), in_buf.data(), zeros.data(), kSonicBlockBytes, is_real);
               
               sn::oram::tree::block<kSonicBlockBytes> new_block{};
               
-              // ZingORAM expects address = -1 for dummies.
-              new_block.address = sn::obliv::ct_select<uint64_t>(k - 1, static_cast<uint64_t>(-1), real);
-              
-              // Safely select the leaf (which is now guaranteed to be 0 for dummies)
-              new_block.leaf_ix = sn::obliv::ct_select<uint64_t>(leaf, 0, real);
+              // 4. Pure bitwise assignment. No macros to flip!
+              new_block.address = ((k - 1) & real_mask) | (static_cast<uint64_t>(-1) & ~real_mask);
+              new_block.leaf_ix = (leaf & real_mask) | (0 & ~real_mask);
               
               std::copy(in_buf.begin(), in_buf.end(), new_block.data.begin());
               impl_->client->insert(new_block);
@@ -665,7 +663,7 @@ void SonicORamAdapter::InsertBatch(std::vector<static_path_oram::Block>& blocks,
       }
       return;
   }
-
+}
 //   std::vector<uint64_t> batch_cur_leaves(B, 0);
 //   std::vector<uint64_t> batch_new_leaves(B, 0);
 //   std::vector<bool> batch_is_new(B, false);
