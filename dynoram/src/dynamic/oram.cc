@@ -714,7 +714,7 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
       uint64_t leaf_to_write = batch[orig_idx].new_leaf;
       std::memcpy(payload.data(), &logical_key, sizeof(uint64_t));
       std::memcpy(payload.data() + 8, &leaf_to_write, sizeof(uint64_t));
-      alloc_build[i].value.data = payload;
+      alloc_build[i].value.data.bytes = payload;
   }
 
   o2th_alloc.build(sn::util::span<O2TH_Alloc::maybe_dummy<O2TH_Alloc::op_request>>(alloc_build.data(), alloc_build.size()));
@@ -745,8 +745,8 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
       bool is_empty = (log_map_[1][j].logical_key == 0);
       uint64_t logical_key_received = 0;
       uint64_t leaf_received = 0;
-      std::memcpy(&logical_key_received, alloc_queries[j-1].data().data(), sizeof(uint64_t));
-      std::memcpy(&leaf_received, alloc_queries[j-1].data().data() + 8, sizeof(uint64_t));
+      std::memcpy(&logical_key_received, alloc_queries[j-1].data.data(), sizeof(uint64_t));
+      std::memcpy(&leaf_received, alloc_queries[j-1].data.data() + 8, sizeof(uint64_t));
       
       bool received_valid = is_empty && (logical_key_received != 0);
       log_map_[1][j].logical_key = sn::obliv::ct_select<uint64_t>(logical_key_received, log_map_[1][j].logical_key, received_valid);
@@ -792,7 +792,8 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
       return sn::obliv::ct_select(target_lt, key_lt, key_eq);
   };
   sn::sortshuffle::ser::bitonic::detail::noop_hook hook_alloc;
-  sn::sortshuffle::ser::bitonic::detail::bitonic_sort_impl(alloc_join.data(), 2 * B, [](const AllocJoinElement& e){ return e; }, comp_alloc, hook_alloc);
+  auto key_ext = [](const AllocJoinElement& e){ return e; };
+  sn::sortshuffle::ser::bitonic::detail::bitonic_sort_impl(alloc_join.data(), 2 * B, key_ext, comp_alloc, hook_alloc);
 
   uint64_t cur_assigned_slot = 0;
   for (size_t i = 0; i < 2 * B; ++i) {
@@ -806,7 +807,7 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
       bool idx_lt = sn::obliv::ct_lt(a.orig_idx, b.orig_idx);
       return sn::obliv::ct_select(idx_lt, target_lt, a.is_target == b.is_target);
   };
-  sn::sortshuffle::ser::bitonic::detail::bitonic_sort_impl(alloc_join.data(), 2 * B, [](const AllocJoinElement& e){ return e; }, comp_alloc2, hook_alloc);
+  sn::sortshuffle::ser::bitonic::detail::bitonic_sort_impl(alloc_join.data(), 2 * B, key_ext, comp_alloc2, hook_alloc);
 
   for (size_t i = 0; i < B; ++i) {
       uint32_t orig_idx = alloc_join[i].orig_idx;
