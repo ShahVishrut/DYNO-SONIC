@@ -450,7 +450,7 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
       
       uint64_t r_leaf_S = sub_orams_[0] ? sub_orams_[0]->GenerateRandomLeaf() - 1 : 0;
       uint64_t r_leaf_L = sub_orams_[1] ? sub_orams_[1]->GenerateRandomLeaf() - 1 : 0;
-      uint64_t new_leaf = sn::obliv::ct_select<uint64_t>(r_leaf_L, r_leaf_S, sn::obliv::ct_eq<int8_t>(sub_idx, 0));
+      uint64_t new_leaf = sn::obliv::ct_select<uint64_t>(r_leaf_S, r_leaf_L, sn::obliv::ct_eq<int8_t>(sub_idx, 0));
       
       // LOGMAP LEAK REMOVED HERE
       
