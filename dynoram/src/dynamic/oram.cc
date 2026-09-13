@@ -925,23 +925,29 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
       }
   }
 
-  // Clear log_map entries for successfully executed Deletes
+  // Update log_map entries for executed accesses
   for (size_t i = 0; i < original_accesses; ++i) {
       uint32_t orig_idx = elems[i].seq;
       bool is_real = !elems[i].is_dummy;
       bool is_delete = sn::obliv::ct_eq(elems[i].op_type, static_cast<uint8_t>(OpType::Delete));
       bool should_clear = is_real && is_delete;
+      bool should_update = is_real && !is_delete;
       
-      if (should_clear) {
-          uint8_t idx = batch[orig_idx].sub_oram_idx;
-          uint64_t phys_k = batch[orig_idx].phys_k;
-          if (idx == 0 && phys_k > 0 && phys_k < log_map_[0].size()) {
-              log_map_[0][phys_k].logical_key = 0;
-              log_map_[0][phys_k].leaf = 0;
-          } else if (idx == 1 && phys_k > 0 && phys_k < log_map_[1].size()) {
-              log_map_[1][phys_k].logical_key = 0;
-              log_map_[1][phys_k].leaf = 0;
-          }
+      uint8_t idx = batch[orig_idx].sub_oram_idx;
+      uint64_t phys_k = batch[orig_idx].phys_k;
+      uint64_t new_leaf = batch[orig_idx].new_leaf;
+      
+      if (phys_k > 0 && phys_k < log_map_[0].size()) {
+          bool match_0 = sn::obliv::ct_eq<uint8_t>(idx, 0);
+          log_map_[0][phys_k].logical_key = sn::obliv::ct_select<uint64_t>(0, log_map_[0][phys_k].logical_key, match_0 & should_clear);
+          log_map_[0][phys_k].leaf = sn::obliv::ct_select<uint64_t>(0, log_map_[0][phys_k].leaf, match_0 & should_clear);
+          log_map_[0][phys_k].leaf = sn::obliv::ct_select<uint64_t>(new_leaf, log_map_[0][phys_k].leaf, match_0 & should_update);
+      }
+      if (phys_k > 0 && phys_k < log_map_[1].size()) {
+          bool match_1 = sn::obliv::ct_eq<uint8_t>(idx, 1);
+          log_map_[1][phys_k].logical_key = sn::obliv::ct_select<uint64_t>(0, log_map_[1][phys_k].logical_key, match_1 & should_clear);
+          log_map_[1][phys_k].leaf = sn::obliv::ct_select<uint64_t>(0, log_map_[1][phys_k].leaf, match_1 & should_clear);
+          log_map_[1][phys_k].leaf = sn::obliv::ct_select<uint64_t>(new_leaf, log_map_[1][phys_k].leaf, match_1 & should_update);
       }
   }
 
