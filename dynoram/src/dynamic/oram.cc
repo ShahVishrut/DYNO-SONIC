@@ -435,9 +435,8 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
       uint64_t new_leaf;
   };
 
-  std::mt19937_64 rng_leaf(42);
-  uint64_t num_leaves_S = sub_orams_[0] ? sub_orams_[0]->Capacity() : 0;
-  uint64_t num_leaves_L = sub_orams_[1] ? sub_orams_[1]->Capacity() : 0;
+  uint64_t cap_S_local = sub_orams_[0] ? sub_orams_[0]->Capacity() : 0;
+  uint64_t cap_L_local = sub_orams_[1] ? sub_orams_[1]->Capacity() : 0;
 
   std::vector<JoinElement> join_arr(2 * B);
   for (size_t i = 0; i < B; ++i) {
@@ -454,8 +453,9 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
       uint64_t phys_k = packed & 0x00FFFFFFFFFFFFFFULL;
       int8_t sub_idx = static_cast<int8_t>(packed >> 56);
       
-      uint64_t num_leaves = (sub_idx == 0) ? num_leaves_S : num_leaves_L;
-      uint64_t new_leaf = (num_leaves > 0 && sub_idx >= 0) ? (rng_leaf() % num_leaves) : 0;
+      uint64_t new_leaf = 0;
+      if (sub_idx == 0 && sub_orams_[0]) new_leaf = sub_orams_[0]->GenerateRandomLeaf() - 1;
+      else if (sub_idx == 1 && sub_orams_[1]) new_leaf = sub_orams_[1]->GenerateRandomLeaf() - 1;
       
       if (!is_dummy_update && sub_idx >= 0 && phys_k > 0) {
           log_map_[sub_idx][phys_k].leaf = new_leaf;
@@ -684,7 +684,7 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
       bool needs_slot = is_real && is_insert;
       
       uint32_t orig_idx = elems[i].seq;
-      uint64_t initial_leaf = (num_leaves_L > 0) ? (rng_leaf() % num_leaves_L) : 0;
+      uint64_t initial_leaf = sub_orams_[1] ? sub_orams_[1]->GenerateRandomLeaf() - 1 : 0;
       batch[orig_idx].new_leaf = sn::obliv::ct_select(initial_leaf, batch[orig_idx].new_leaf, needs_slot);
       batch[orig_idx].cur_leaf = sn::obliv::ct_select<uint64_t>(0, batch[orig_idx].cur_leaf, needs_slot);
       
@@ -1070,7 +1070,7 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
             log_map_[0][j].leaf = sn::obliv::ct_select<uint64_t>(0, log_map_[0][j].leaf, match);
         }
         uint64_t new_phys_k_0 = 0;
-        uint64_t new_insert_leaf_1 = (num_leaves_L > 0) ? (rng_leaf() % num_leaves_L) : 0;
+        uint64_t new_insert_leaf_1 = sub_orams_[1] ? sub_orams_[1]->GenerateRandomLeaf() - 1 : 0;
         for (uint64_t j = 1; j <= cap_L; ++j) {
             bool is_empty = (log_map_[1][j].logical_key == 0);
             bool select_this = is_valid_0 && is_empty && (new_phys_k_0 == 0);
@@ -1093,7 +1093,7 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
             log_map_[1][j].leaf = sn::obliv::ct_select<uint64_t>(0, log_map_[1][j].leaf, match);
         }
         uint64_t new_phys_k_1 = 0;
-        uint64_t new_insert_leaf_0 = (num_leaves_S > 0) ? (rng_leaf() % num_leaves_S) : 0;
+        uint64_t new_insert_leaf_0 = sub_orams_[0] ? sub_orams_[0]->GenerateRandomLeaf() - 1 : 0;
         for (uint64_t j = 1; j <= cap_S; ++j) {
             bool is_empty = (log_map_[0][j].logical_key == 0);
             bool select_this = is_valid_1 && is_empty && (new_phys_k_1 == 0);
