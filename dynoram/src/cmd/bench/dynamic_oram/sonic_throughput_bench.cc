@@ -30,7 +30,7 @@ void MeasurePlainSonicThroughput(double target_sla_ms) {
         while (true) {
             // Because PMChain relies on oblivious epochs configured at initialization time,
             // we MUST recreate the adapter with the exact target batch size to get an accurate measurement.
-            PMChainAdapter adapter(capacity, 56, batch_size);
+            PMChainAdapter adapter(capacity, 48, batch_size);
             
             // Warmup
             adapter.SpinlockSonicBenchmark(0, batch_size, false);

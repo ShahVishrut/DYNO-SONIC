@@ -538,20 +538,23 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
       batch[elems[i].seq].new_leaf = fw_new_leaf;
   }
 
-  auto simd_select_56 = [](uint8_t* dest, const uint8_t* a, const uint8_t* b, bool cond) {
+  auto simd_select_48 = [](uint8_t* dest, const uint8_t* a, const uint8_t* b, bool cond) {
 #if defined(__AVX2__)
       __m256i mask = _mm256_set1_epi8(cond ? 0xFF : 0x00);
+      
+      // First 32 bytes (offset 0)
       __m256i a1 = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(a));
       __m256i b1 = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(b));
       __m256i r1 = _mm256_blendv_epi8(b1, a1, mask);
       _mm256_storeu_si256(reinterpret_cast<__m256i*>(dest), r1);
 
-      __m256i a2 = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(a + 24));
-      __m256i b2 = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(b + 24));
+      // Remaining 16 bytes + 16 bytes of overlap (offset 16)
+      __m256i a2 = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(a + 16));
+      __m256i b2 = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(b + 16));
       __m256i r2 = _mm256_blendv_epi8(b2, a2, mask);
-      _mm256_storeu_si256(reinterpret_cast<__m256i*>(dest + 24), r2);
+      _mm256_storeu_si256(reinterpret_cast<__m256i*>(dest + 16), r2);
 #else
-      sn::obliv::ct_select_array(dest, a, b, 56, cond);
+      sn::obliv::ct_select_array(dest, a, b, 48, cond);
 #endif
   };
 
@@ -581,7 +584,7 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
       
       bool is_write = is_insert | is_update;
       if (val_len_ > 0) {
-          if (val_len_ == 56) simd_select_56(current_payload.data(), batch[elems[i].seq].val.get(), current_payload.data(), is_write);
+          if (val_len_ == 48) simd_select_48(current_payload.data(), batch[elems[i].seq].val.get(), current_payload.data(), is_write);
           else sn::obliv::ct_select_array(current_payload.data(), batch[elems[i].seq].val.get(), current_payload.data(), val_len_, is_write);
       }
       has_payload = has_payload | is_write;
@@ -592,7 +595,7 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
       // Forward latest payload to searches
       bool forward_to_search = is_search & has_payload & !is_deleted;
       if (val_len_ > 0) {
-          if (val_len_ == 56) simd_select_56(batch[elems[i].seq].result.val_.get(), current_payload.data(), batch[elems[i].seq].result.val_.get(), forward_to_search);
+          if (val_len_ == 48) simd_select_48(batch[elems[i].seq].result.val_.get(), current_payload.data(), batch[elems[i].seq].result.val_.get(), forward_to_search);
           else sn::obliv::ct_select_array(batch[elems[i].seq].result.val_.get(), current_payload.data(), batch[elems[i].seq].result.val_.get(), val_len_, forward_to_search);
       }
       batch[elems[i].seq].result.key_ = sn::obliv::ct_select<uint64_t>(1, batch[elems[i].seq].result.key_, forward_to_search);
@@ -629,7 +632,7 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
       
       bool captures_payload = is_write & !has_future_write;
       if (val_len_ > 0) {
-          if (val_len_ == 56) simd_select_56(backward_payload.data(), batch[elems[i].seq].val.get(), backward_payload.data(), captures_payload);
+          if (val_len_ == 48) simd_select_48(backward_payload.data(), batch[elems[i].seq].val.get(), backward_payload.data(), captures_payload);
           else sn::obliv::ct_select_array(backward_payload.data(), batch[elems[i].seq].val.get(), backward_payload.data(), val_len_, captures_payload);
       }
       
@@ -641,7 +644,7 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
       
       if (val_len_ > 0) {
           bool receives_payload = is_real & is_write;
-          if (val_len_ == 56) simd_select_56(batch[elems[i].seq].val.get(), backward_payload.data(), batch[elems[i].seq].val.get(), receives_payload);
+          if (val_len_ == 48) simd_select_48(batch[elems[i].seq].val.get(), backward_payload.data(), batch[elems[i].seq].val.get(), receives_payload);
           else sn::obliv::ct_select_array(batch[elems[i].seq].val.get(), backward_payload.data(), batch[elems[i].seq].val.get(), val_len_, receives_payload);
       }
       

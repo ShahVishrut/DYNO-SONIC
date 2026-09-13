@@ -94,7 +94,7 @@ BenchmarkResult MeasureThroughput(
             
             op.key = (rng() % oram->Capacity()) + 1; 
             if (op.type == ORam::OpType::Insert) {
-                op.val = std::make_unique<uint8_t[]>(56);
+                op.val = std::make_unique<uint8_t[]>(48);
             }
             batch.push_back(std::move(op));
         }
@@ -130,7 +130,7 @@ int main(int argc, char **argv) {
     auto enc_key = GenerateKey();
     
     size_t capacity_po2 = 23; // 2^23 = 8,388,608 blocks
-    auto oram = std::make_unique<ORam>(capacity_po2, 56); 
+    auto oram = std::make_unique<ORam>(capacity_po2, 48); 
     
     // Fill the ORAM to 50% capacity so we don't trigger resizes easily
     std::cout << "Initializing ORAM to 50% capacity...\n";
@@ -140,7 +140,7 @@ int main(int argc, char **argv) {
         ORam::BatchOperation op;
         op.type = ORam::OpType::Insert;
         op.key = i;
-        op.val = std::make_unique<uint8_t[]>(56);
+        op.val = std::make_unique<uint8_t[]>(48);
         init_batch.push_back(std::move(op));
         
         if (init_batch.size() >= 16384 || i == target_size) {
@@ -163,7 +163,7 @@ int main(int argc, char **argv) {
     std::cout << "=============================================\n";
     std::cout << "Testing PAPER-ONLINE SONIC Interface (Raw Throughput - NO Evictions, Deferred offline, SPINLOCK MODE)\n";
     std::cout << "=============================================\n";
-    auto sonic = std::make_unique<dyno::dynamic_stepping_path_oram::PMChainAdapter>(1ULL << capacity_po2, 56, 100000);
+    auto sonic = std::make_unique<dyno::dynamic_stepping_path_oram::PMChainAdapter>(1ULL << capacity_po2, 48, 100000);
 
     auto res_core_search_spin = MeasurePMChainThroughput(sonic.get(), 1, target_sla_ms, 2);
     std::cout << "[PAPER-ONLINE SPINLOCK] 100% Search," << res_core_search_spin.batch_size << "," << res_core_search_spin.latency_ms << "," << res_core_search_spin.throughput_ops_sec << "\n\n";
