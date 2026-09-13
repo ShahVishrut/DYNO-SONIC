@@ -195,9 +195,9 @@ static_path_oram::Block SonicORamAdapter::ReadAndRemove(static_path_oram::Pos p,
       res.meta_.pos_ = new_leaf + 1;
   }
   
-  // Zero out the result for dummies to prevent data corruption
-  res.meta_.key_ = sn::obliv::ct_select<uint64_t>(res.meta_.key_, 0, is_real);
-  res.meta_.pos_ = sn::obliv::ct_select<uint64_t>(res.meta_.pos_, 0, is_real);
+  // FIXED: Correct ct_select ordering (0, value, true)
+  res.meta_.key_ = sn::obliv::ct_select<uint64_t>(0, res.meta_.key_, is_real);
+  res.meta_.pos_ = sn::obliv::ct_select<uint64_t>(0, res.meta_.pos_, is_real);
   if (val_len_ > 0) {
       std::vector<uint8_t> zeros(val_len_, 0);
       sn::obliv::ct_select_array(res.val_.get(), res.val_.get(), zeros.data(), val_len_, is_real);
@@ -261,9 +261,9 @@ static_path_oram::Block SonicORamAdapter::Read(static_path_oram::Pos p, static_p
       res.meta_.pos_ = new_leaf + 1; 
   }
   
-  // Zero out the result for dummies to prevent data corruption
-  res.meta_.key_ = sn::obliv::ct_select<uint64_t>(res.meta_.key_, 0, is_real);
-  res.meta_.pos_ = sn::obliv::ct_select<uint64_t>(res.meta_.pos_, 0, is_real);
+  // FIXED: Correct ct_select ordering
+  res.meta_.key_ = sn::obliv::ct_select<uint64_t>(0, res.meta_.key_, is_real);
+  res.meta_.pos_ = sn::obliv::ct_select<uint64_t>(0, res.meta_.pos_, is_real);
   if (val_len_ > 0) {
       std::vector<uint8_t> zeros(val_len_, 0);
       sn::obliv::ct_select_array(res.val_.get(), res.val_.get(), zeros.data(), val_len_, is_real);
@@ -416,9 +416,9 @@ std::vector<static_path_oram::Block> SonicORamAdapter::ReadAndRemoveBatch(const 
                           res.meta_.pos_ = batch_new_leaves[j] + 1;
                       }
                       
-                      // Zero out the result for dummies to prevent data corruption
-                      res.meta_.key_ = sn::obliv::ct_select<uint64_t>(res.meta_.key_, 0, op.is_real);
-                      res.meta_.pos_ = sn::obliv::ct_select<uint64_t>(res.meta_.pos_, 0, op.is_real);
+                      // FIXED: Correct ct_select ordering
+                      res.meta_.key_ = sn::obliv::ct_select<uint64_t>(0, res.meta_.key_, op.is_real);
+                      res.meta_.pos_ = sn::obliv::ct_select<uint64_t>(0, res.meta_.pos_, op.is_real);
                       if (val_len_ > 0) {
                           std::vector<uint8_t> zeros(val_len_, 0);
                           sn::obliv::ct_select_array(res.val_.get(), res.val_.get(), zeros.data(), val_len_, op.is_real);
@@ -568,9 +568,9 @@ std::vector<static_path_oram::Block> SonicORamAdapter::ReadBatch(const std::vect
                           res.meta_.pos_ = batch_new_leaves[j] + 1;
                       }
                       
-                      // Zero out the result for dummies to prevent data corruption
-                      res.meta_.key_ = sn::obliv::ct_select<uint64_t>(res.meta_.key_, 0, op.is_real);
-                      res.meta_.pos_ = sn::obliv::ct_select<uint64_t>(res.meta_.pos_, 0, op.is_real);
+                      // FIXED: Correct ct_select ordering
+                      res.meta_.key_ = sn::obliv::ct_select<uint64_t>(0, res.meta_.key_, op.is_real);
+                      res.meta_.pos_ = sn::obliv::ct_select<uint64_t>(0, res.meta_.pos_, op.is_real);
                       if (val_len_ > 0) {
                           std::vector<uint8_t> zeros(val_len_, 0);
                           sn::obliv::ct_select_array(res.val_.get(), res.val_.get(), zeros.data(), val_len_, op.is_real);

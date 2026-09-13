@@ -663,10 +663,10 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
       
       uint32_t orig_idx = elems[i].seq;
       uint64_t initial_leaf = sub_orams_[1] ? sub_orams_[1]->GenerateRandomLeaf() - 1 : 0;
-      batch[orig_idx].new_leaf = sn::obliv::ct_select<uint64_t>(batch[orig_idx].new_leaf, initial_leaf, needs_slot);
-      batch[orig_idx].cur_leaf = sn::obliv::ct_select<uint64_t>(batch[orig_idx].cur_leaf, 0, needs_slot);
+      batch[orig_idx].new_leaf = sn::obliv::ct_select(initial_leaf, batch[orig_idx].new_leaf, needs_slot);
+      batch[orig_idx].cur_leaf = sn::obliv::ct_select<uint64_t>(0, batch[orig_idx].cur_leaf, needs_slot);
       
-      insert_seq_arr[i] = sn::obliv::ct_select<uint64_t>(0, current_insert_seq, needs_slot);
+      insert_seq_arr[i] = sn::obliv::ct_select<uint64_t>(current_insert_seq, 0, needs_slot);
       current_insert_seq = sn::obliv::ct_select<uint64_t>(current_insert_seq + 1, current_insert_seq, needs_slot);
   }
 
@@ -835,9 +835,9 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
     
     bool is_small_real = is_real && is_access && (idx == 0);
     SonicORamAdapter::AccessOp op;
-    op.key = sn::obliv::ct_select<uint64_t>(0, batch[orig_idx].phys_k, is_small_real);
-    op.cur_leaf = sn::obliv::ct_select<uint64_t>(0, batch[orig_idx].cur_leaf, is_small_real);
-    op.new_leaf = sn::obliv::ct_select<uint64_t>(0, batch[orig_idx].new_leaf, is_small_real);
+    op.key = sn::obliv::ct_select<uint64_t>(batch[orig_idx].phys_k, 0, is_small_real);
+    op.cur_leaf = sn::obliv::ct_select<uint64_t>(batch[orig_idx].cur_leaf, 0, is_small_real);
+    op.new_leaf = sn::obliv::ct_select<uint64_t>(batch[orig_idx].new_leaf, 0, is_small_real);
     op.op_type = op_type;
     if (batch[orig_idx].val) {
       op.val = std::make_unique<uint8_t[]>(val_len_);
@@ -848,9 +848,9 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
 
     bool is_large_real = is_real && is_access && (idx == 1);
     SonicORamAdapter::AccessOp op_l;
-    op_l.key = sn::obliv::ct_select<uint64_t>(0, batch[orig_idx].phys_k, is_large_real);
-    op_l.cur_leaf = sn::obliv::ct_select<uint64_t>(0, batch[orig_idx].cur_leaf, is_large_real);
-    op_l.new_leaf = sn::obliv::ct_select<uint64_t>(0, batch[orig_idx].new_leaf, is_large_real);
+    op_l.key = sn::obliv::ct_select<uint64_t>(batch[orig_idx].phys_k, 0, is_large_real);
+    op_l.cur_leaf = sn::obliv::ct_select<uint64_t>(batch[orig_idx].cur_leaf, 0, is_large_real);
+    op_l.new_leaf = sn::obliv::ct_select<uint64_t>(batch[orig_idx].new_leaf, 0, is_large_real);
     op_l.op_type = op_type;
     if (batch[orig_idx].val) {
       op_l.val = std::make_unique<uint8_t[]>(val_len_);
