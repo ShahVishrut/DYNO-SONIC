@@ -626,7 +626,12 @@ void SonicORamAdapter::InsertBatch(std::vector<static_path_oram::Block>& blocks,
           for (size_t j = chunk_start; j < chunk_end; ++j) {
               uint64_t k = blocks[j].meta_.key_;
               bool real = (!sn::obliv::ct_eq<uint64_t>(k, 0));
-              uint64_t leaf = blocks[j].meta_.pos_ - 1;
+              // pos_ is uint32_t; if pos_==0, (pos_-1) underflows to UINT32_MAX.
+              // Guard: only compute (pos_-1) when pos_>0; otherwise use 0.
+              uint32_t raw_pos = blocks[j].meta_.pos_;
+              bool pos_valid = (raw_pos > 0);
+              uint64_t leaf = sn::obliv::ct_select<uint64_t>(
+                  static_cast<uint64_t>(raw_pos) - 1, 0, pos_valid);
               
               thread_local std::array<uint8_t, kSonicBlockBytes> in_buf;
               std::fill(in_buf.begin(), in_buf.end(), 0);
