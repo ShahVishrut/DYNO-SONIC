@@ -792,8 +792,8 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
       return sn::obliv::ct_select(target_lt, key_lt, key_eq);
   };
   sn::sortshuffle::ser::bitonic::detail::noop_hook hook_alloc;
-  auto key_ext = [](const AllocJoinElement& e){ return e; };
-  sn::sortshuffle::ser::bitonic::detail::bitonic_sort_impl(alloc_join.data(), 2 * B, key_ext, comp_alloc, hook_alloc);
+  auto key_ext_alloc = [](const AllocJoinElement& e){ return e; };
+  sn::sortshuffle::ser::bitonic::detail::bitonic_sort_impl(alloc_join.data(), 2 * B, key_ext_alloc, comp_alloc, hook_alloc);
 
   uint64_t cur_assigned_slot = 0;
   for (size_t i = 0; i < 2 * B; ++i) {
@@ -807,7 +807,7 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
       bool idx_lt = sn::obliv::ct_lt(a.orig_idx, b.orig_idx);
       return sn::obliv::ct_select(idx_lt, target_lt, a.is_target == b.is_target);
   };
-  sn::sortshuffle::ser::bitonic::detail::bitonic_sort_impl(alloc_join.data(), 2 * B, key_ext, comp_alloc2, hook_alloc);
+  sn::sortshuffle::ser::bitonic::detail::bitonic_sort_impl(alloc_join.data(), 2 * B, key_ext_alloc, comp_alloc2, hook_alloc);
 
   for (size_t i = 0; i < B; ++i) {
       uint32_t orig_idx = alloc_join[i].orig_idx;
