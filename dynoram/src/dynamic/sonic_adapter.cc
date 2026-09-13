@@ -660,6 +660,10 @@ void SonicORamAdapter::InsertBatch(std::vector<static_path_oram::Block>& blocks,
               new_block.leaf_ix = sn::obliv::ct_select<uint64_t>(leaf, 0, real);
               std::copy(in_buf.begin(), in_buf.end(), new_block.data.begin());
               
+              if (new_block.leaf_ix > 100000) {
+                  std::cerr << "[DEBUG] InsertBatch passing huge leaf_ix: " << new_block.leaf_ix << " k=" << k << " leaf=" << leaf << " real=" << real << std::endl;
+              }
+              
               impl_->client->insert(new_block);
           }
       }
