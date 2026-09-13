@@ -663,7 +663,7 @@ void ORam::ExecuteBatch(std::vector<BatchOperation>& batch, crypto::Key enc_key,
       
       uint32_t orig_idx = elems[i].seq;
       uint64_t initial_leaf = sub_orams_[1] ? sub_orams_[1]->GenerateRandomLeaf() - 1 : 0;
-      batch[orig_idx].new_leaf = sn::obliv::ct_select(initial_leaf, batch[orig_idx].new_leaf, needs_slot);
+      batch[orig_idx].new_leaf = sn::obliv::ct_select<uint64_t>(initial_leaf, batch[orig_idx].new_leaf, needs_slot);
       batch[orig_idx].cur_leaf = sn::obliv::ct_select<uint64_t>(0, batch[orig_idx].cur_leaf, needs_slot);
       
       insert_seq_arr[i] = sn::obliv::ct_select<uint64_t>(current_insert_seq, 0, needs_slot);
