@@ -433,6 +433,9 @@ void TestORamDeterministicScale() {
 
   for (int i = 1; i <= 3; ++i) {
     auto res = oram->Read(i, enc_key);
+    std::cout << "[DEBUG] Read Key " << i << " returned val_ is null: " << (res.val_ == nullptr)
+              << ", val: " << (res.val_ != nullptr ? (int)res.val_.get()[0] : -1) 
+              << ", key: " << res.key_ << "\n";
     if (res.val_ == nullptr || res.val_.get()[0] != ((i % 255) + 20)) {
       std::cerr << "Mismatch at Key " << i << " after update! val_ is null: " << (res.val_ == nullptr) << ", val: " << (res.val_ != nullptr ? (int)res.val_.get()[0] : -1) << "\n";
       assert(false);
@@ -453,6 +456,11 @@ void TestORamDeterministicScale() {
 
   for (int i = 1; i <= 515; ++i) {
     auto res = oram->Read(i, enc_key);
+    if (i <= 5) {
+      std::cout << "[DEBUG] Read Key " << i << " returned val_ is null: " << (res.val_ == nullptr)
+                << ", val: " << (res.val_ != nullptr ? (int)res.val_.get()[0] : -1) 
+                << ", key: " << res.key_ << "\n";
+    }
     if (res.val_ != nullptr && res.val_.get()[0] != 0) {
       std::cerr << "Key " << i
                 << " should have been deleted after scale down! val is: " << (int)res.val_.get()[0] << "\n";
