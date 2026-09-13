@@ -160,6 +160,10 @@ public:
   }
 
   void path_to_leaf(u64 leaf_ix, sn::util::span<u64> node_ids) const {
+    if (leaf_ix >= leaf_count_cached_) {
+        std::cerr << "[DYNO_CRASH] path_to_leaf out of bounds: leaf_ix=" << leaf_ix 
+                  << " >= leaf_count=" << leaf_count_cached_ << std::endl;
+    }
     sn::util::log::ensure(leaf_ix < leaf_count_cached_, "tree::topology::path_to_leaf: leaf index out of range");
     sn::util::log::ensure(node_ids.size() == height_ + 1, "tree::topology::path_to_leaf: node span size mismatch");
 
